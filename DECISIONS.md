@@ -187,6 +187,9 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Fitting M **through** the downstream DRT — minimise ΔE(DRT(M·x), LUT(x)), exposure
   matched per level, D65 neutral locked, hue ring at −1/0/+1 stops — fixes this on the
   held-out chart: K1S1 1.76 (vs 2.13 without matrix), Ulook4b 4.61 (vs 5.44).
+- Confirmed in Resolve (v2 exports, same day): the through-OpenDRT DCTLs render within
+  0.16 ΔE00 of our prediction; colour patches vs the LUT (exposure matched) improved
+  from 2.13 → 1.79 (K1S1) and 5.44 → 4.59 (Ulook4b) against OpenDRT alone.
 - Direction (pending user confirmation): add a "reference display transform" input —
   a LUT the user exports from Resolve (DWG/DI → display) for whatever CST/DRT follows the
   DCTL — and fit through it. Ulook4b's split tone (warm highlights, cool shadows) and its
