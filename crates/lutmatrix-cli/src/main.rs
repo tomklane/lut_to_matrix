@@ -3,9 +3,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use lutmatrix_core::analysis::{analyze, Analysis, Severity};
 use lutmatrix_core::detect::{detect, Confidence, Guess};
 use lutmatrix_core::lut::Lut;
+use lutmatrix_core::math::{Cat, Mat3};
+use lutmatrix_core::sample::{GrayAnchor, Settings, WhiteMode};
+use lutmatrix_core::spaces::{CameraSpaceId, DisplayGamut, DisplayTransfer, InputSpace, OutputSpace};
 
 #[derive(Parser)]
 #[command(name = "lutmatrix", version = lutmatrix_core::VERSION, about = "Extract a 3x3 XYZ matrix from a camera-log → display LUT")]
@@ -23,6 +27,174 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
+    Fit {
+        file: PathBuf,
+        #[command(flatten)]
+        opts: FitOpts,
+        /// Print the full analysis as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args)]
+struct FitOpts {
+    /// Override input space id, e.g. arri_log_c3_awg3, arri_log_c4_awg4, sony_s_log3_s_gamut3_cine.
+    #[arg(long)]
+    input: Option<String>,
+    /// ARRI LogC3 exposure index.
+    #[arg(long)]
+    ei: Option<u16>,
+    /// Override output gamut: rec709, p3_d65, p3_dci, rec2020.
+    #[arg(long)]
+    gamut: Option<String>,
+    /// Override output transfer: 2.2, 2.4, 2.6 or pq.
+    #[arg(long)]
+    transfer: Option<String>,
+    /// PQ peak luminance (cd/m²).
+    #[arg(long)]
+    peak: Option<f64>,
+    /// White mode: preserve (default) or d65.
+    #[arg(long, default_value = "preserve")]
+    white: String,
+    /// Chromatic adaptation for D65 mode: bradford (default) or cat02.
+    #[arg(long, default_value = "bradford")]
+    cat: String,
+    /// Middle-gray anchor: scene (A, default) or display (B).
+    #[arg(long, default_value = "scene")]
+    anchor: String,
+    /// Display middle gray in cd/m² (default: BT.2408-based or the LUT's DW hint).
+    #[arg(long)]
+    mid_gray_nits: Option<f64>,
+    /// Exposure bracket ±stops (0 = off).
+    #[arg(long, default_value_t = 0.0)]
+    bracket: f64,
+    /// Number of hues in the sample ring.
+    #[arg(long, default_value_t = 36)]
+    hues: usize,
+    /// Disable exposure normalisation.
+    #[arg(long)]
+    no_normalize: bool,
+    /// Least squares only (no perceptual refinement).
+    #[arg(long)]
+    ls_only: bool,
+    /// Preserve mode: constrain the matrix to reproduce the LUT's white exactly.
+    #[arg(long)]
+    lock_neutral: bool,
+}
+
+fn parse_id<T: serde::de::DeserializeOwned>(s: &str, what: &str) -> Result<T, String> {
+    serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| format!("unknown {what} '{s}'"))
+}
+
+fn build(lut: &Lut, o: &FitOpts) -> Result<(InputSpace, OutputSpace, Settings, Option<f64>), String> {
+    let d = detect(lut);
+    let mut input = d.input.value;
+    if let Some(id) = &o.input {
+        input = InputSpace::new(parse_id::<CameraSpaceId>(id, "input space")?);
+    }
+    if let Some(ei) = o.ei {
+        input.arri_ei = ei;
+    }
+    let mut output = d.output_space();
+    if let Some(g) = &o.gamut {
+        output.gamut = parse_id::<DisplayGamut>(g, "gamut")?;
+    }
+    if let Some(t) = &o.transfer {
+        output.transfer = match t.to_ascii_lowercase().as_str() {
+            "pq" | "st2084" => DisplayTransfer::Pq { peak_nits: 1000.0 },
+            g => DisplayTransfer::Gamma { gamma: g.parse().map_err(|_| format!("bad transfer '{t}'"))? },
+        };
+    }
+    if let (Some(p), DisplayTransfer::Pq { peak_nits }) = (o.peak, &mut output.transfer) {
+        *peak_nits = p;
+    }
+    let s = Settings {
+        white_mode: match o.white.as_str() {
+            "d65" => WhiteMode::D65,
+            "preserve" => WhiteMode::PreserveLut,
+            w => return Err(format!("bad white mode '{w}'")),
+        },
+        cat: match o.cat.as_str() {
+            "bradford" => Cat::Bradford,
+            "cat02" => Cat::Cat02,
+            c => return Err(format!("bad CAT '{c}'")),
+        },
+        anchor: match o.anchor.as_str() {
+            "scene" | "a" => GrayAnchor::SceneLinear,
+            "display" | "b" => GrayAnchor::DisplayTarget,
+            a => return Err(format!("bad anchor '{a}'")),
+        },
+        display_middle_gray_nits: o.mid_gray_nits,
+        bracket_stops: o.bracket,
+        hues: o.hues,
+        normalize_exposure: !o.no_normalize,
+        refine: !o.ls_only,
+        lock_neutral: o.lock_neutral,
+        ..Settings::default()
+    };
+    Ok((input, output, s, d.middle_gray_hint.map(|h| h.0)))
+}
+
+fn print_matrix(name: &str, m: &Mat3) {
+    println!("  {name}");
+    for r in 0..3 {
+        println!("    [{:>13.10} {:>13.10} {:>13.10}]", m[(r, 0)], m[(r, 1)], m[(r, 2)]);
+    }
+}
+
+fn print_analysis(file: &str, a: &Analysis) {
+    println!("{file}");
+    println!("  Input           {}", a.input_name);
+    println!("  Output          {}", a.output_name);
+    println!(
+        "  White mode      {}",
+        match a.settings.white_mode {
+            WhiteMode::PreserveLut if a.settings.lock_neutral => "preserve LUT white (neutral locked)".to_string(),
+            WhiteMode::PreserveLut => "preserve LUT white".to_string(),
+            WhiteMode::D65 => format!("D65 ({:?} CAT + neutral constraint)", a.settings.cat),
+        }
+    );
+    println!(
+        "  Samples         {} used{}",
+        a.samples_used,
+        a.samples_skipped
+            .iter()
+            .map(|(s, n)| format!(", {n} {}", s.label()))
+            .collect::<String>()
+    );
+    print_matrix("M_XYZ (least squares)", &a.m_xyz_ls);
+    if let Some(m) = &a.m_xyz_refined {
+        print_matrix(&format!("M_XYZ (refined, min {})", a.metric.label()), m);
+    }
+    let row = |name: &str, s: &lutmatrix_core::analysis::FitStats| {
+        println!(
+            "  {name:<15} {}: mean {:.3}  rms {:.3}  p95 {:.3}  max {:.3}  | neutral {:.3}, Δu′v′ {:.5}",
+            s.metric.label(), s.mean, s.rms, s.p95, s.max, s.neutral, s.neutral_duv
+        );
+    };
+    row("Error (LS)", &a.stats_ls);
+    if let Some(s) = &a.stats_refined {
+        row("Error (refined)", s);
+    }
+    let s = a.stats_refined.as_ref().unwrap_or(&a.stats_ls);
+    println!(
+        "  Worst hues      {}",
+        s.worst_hues
+            .iter()
+            .map(|h| format!("{} {:.0}° ({:.2})", h.name, h.hue_deg, h.mean))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for d in &a.diagnostics {
+        let tag = match d.severity {
+            Severity::Info => "Info",
+            Severity::Warning => "WARNING",
+        };
+        println!("  {tag:<15} {}", d.message);
+    }
+    println!();
 }
 
 fn conf(c: Confidence) -> &'static str {
@@ -111,6 +283,36 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
+            }
+        }
+        Cmd::Fit { file, opts, json } => {
+            let lut = match Lut::load(&file) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("{}: {e}", file.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let (input, output, settings, hint) = match build(&lut, &opts) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match analyze(&lut, input, output, &settings, hint) {
+                Ok(a) if json => {
+                    println!("{}", serde_json::to_string_pretty(&a).unwrap());
+                    ExitCode::SUCCESS
+                }
+                Ok(a) => {
+                    print_analysis(lut.filename.as_deref().unwrap_or("?"), &a);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{}: {e}", file.display());
+                    ExitCode::FAILURE
+                }
             }
         }
     }
