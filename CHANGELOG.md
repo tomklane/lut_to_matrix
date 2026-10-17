@@ -18,3 +18,5 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ACEScct / AP1.
 - Display spaces: Rec.709, P3-D65, P3-DCI, Rec.2020 with gamma 2.2/2.4/2.6 or PQ.
 - BT.2408-8 middle-gray defaults (26 cd/m² PQ; 26/203 of peak for SDR).
+- colour-science fixture generator (`tools/gen_fixtures.py`) and reference tests for
+  every curve, gamut matrix, CAT, PQ and DWG round trips.
