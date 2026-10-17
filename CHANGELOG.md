@@ -28,3 +28,4 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lands vs display middle gray); PQ inference from output range; diffuse-white hint
   ("DW100") for display middle gray.
 - `lutmatrix inspect` CLI command (text or `--json`).
+- GitHub Actions CI: tests and clippy on macOS, Windows and Linux.

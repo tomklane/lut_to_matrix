@@ -18,7 +18,22 @@ cargo test --workspace
 ## Usage (CLI)
 
 ```sh
-cargo run -p lutmatrix-cli -- inspect "path/to/My LUT.cube"
+cargo run --release -p lutmatrix-cli -- inspect "path/to/My LUT.cube" [more.cube ...]
+cargo run --release -p lutmatrix-cli -- inspect --json "path/to/My LUT.cube"
 ```
+
+`inspect` reports the LUT format, the detected camera input and display output
+(with confidence and reasons), and where 18% gray lands on the display.
+
+## Tests
+
+```sh
+cargo test --workspace
+# also parse a folder of your own LUTs (they are never committed):
+LUTMATRIX_SAMPLE_LUTS="/path/to/luts" cargo test --workspace
+```
+
+Reference values come from colour-science; regenerate with
+`python3 tools/gen_fixtures.py` (requires `pip install colour-science`).
 
 Installer, app and DCTL usage instructions arrive with later stages.
