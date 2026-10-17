@@ -115,6 +115,34 @@ fn normalise(v: f64, min: f64, max: f64) -> f64 {
     ((v - min) / (max - min)).clamp(0.0, 1.0)
 }
 
+/// Anything that maps LUT-input code values to output code values. Implemented by
+/// [`Lut`]; tests also use exact analytic transforms.
+pub trait Transform {
+    fn apply_rgb(&self, rgb: &Vec3, interp: Interpolation) -> Vec3;
+    /// True if `rgb` is inside the input domain.
+    fn in_domain_rgb(&self, _rgb: &Vec3) -> bool {
+        true
+    }
+}
+
+impl Transform for Lut {
+    fn apply_rgb(&self, rgb: &Vec3, interp: Interpolation) -> Vec3 {
+        self.apply(rgb, interp)
+    }
+    fn in_domain_rgb(&self, rgb: &Vec3) -> bool {
+        self.in_domain(rgb)
+    }
+}
+
+/// An exact transform from a closure (used by tests and synthetic checks).
+pub struct FnTransform<F: Fn(&Vec3) -> Vec3>(pub F);
+
+impl<F: Fn(&Vec3) -> Vec3> Transform for FnTransform<F> {
+    fn apply_rgb(&self, rgb: &Vec3, _interp: Interpolation) -> Vec3 {
+        (self.0)(rgb)
+    }
+}
+
 /// A LUT file: optional shaper, optional 3D table, plus metadata used for detection.
 #[derive(Debug, Clone)]
 pub struct Lut {

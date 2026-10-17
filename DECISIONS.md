@@ -89,3 +89,56 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - ARRI's HDR LUTs are named "DW100" and place 18% gray at ≈13 nits (diffuse white at
   100 nits), a stop below BT.2408's 26 nits. When "DW<n>" is in the name we suggest
   display middle gray = n × 26/203.
+
+## D13 — Test colours
+- Hue ring in CIELAB (D65, Yn = 1) at constant Y = anchor gray (0.18 in mode A), default
+  36 hues × saturations {25, 50, 75, 95}% + neutral. Saturation is a fraction of the
+  per-hue maximum chroma that stays inside **both** the camera gamut and the display
+  gamut (setting: camera only). Rationale: measure colours the display can show, not the
+  LUT's gamut compression, which no 3×3 matrix can model.
+- Optional exposure bracket ±N stops (setting, default off) reuses the same
+  chromaticities scaled in luminance.
+- Skipped: camera RGB < 0, LUT input outside its domain, output code ≤ 0.0005 or within
+  0.001 of the top code (1.0, or PQ(peak) for HDR). Thresholds are settings.
+
+## D14 — Exposure normalisation
+- On (default): per exposure level, the LUT output is scaled by k = Y_in(gray) /
+  Y_out(gray), so the matrix has unity gain on neutral and captures colour only.
+- Off: a fixed k = scene middle gray / display middle gray, so the matrix also carries
+  the LUT's exposure placement relative to the display middle-gray setting (reported).
+
+## D15 — D65 white mode: chromatic adaptation **and** a neutral constraint
+- Chosen approach: (1) measure the white the LUT renders for scene neutral; (2) adapt
+  the LUT's output from that white to D65 with a CAT (Bradford default, CAT02 option),
+  keeping luminance; (3) fit with the exact linear constraint M·D65 = D65 (Lagrange
+  least squares, then LM in the constraint's 6-D null space).
+- Why both: a hard constraint alone forces neutrals to D65 while still matching the
+  LUT's white-shifted colours, which bends every hue toward the old white; a CAT alone
+  removes the cast perceptually but leaves a small residual neutral error from the fit.
+  CAT + constraint gives colours "as if the LUT were white-balanced to D65" and an exact
+  D65 neutral.
+- Note: if the LUT's white shift is a scaling in display RGB (e.g. P3 rendered on a DCI
+  projector), Bradford doesn't undo it exactly; the result is the Bradford-adapted look,
+  not the identity. Tests assert exactly that.
+
+## D16 — Neutral handling in preserve mode
+- Preserve mode is an unconstrained fit, as specified. With 1 neutral among 145
+  samples the unconstrained fit tinted neutrals by ~1.8 ΔE2000 on ARRI's Rec.709 LUT,
+  so neutral samples are weighted (default: one neutral = one whole hue ring).
+- Option `lock_neutral`: constrain M·D65 = the LUT's measured white exactly. On ARRI's
+  LUTs this costs almost nothing in mean error (1.36 locked vs 1.39 weighted) and makes
+  neutral error exactly 0. Off by default to follow the brief; candidate default.
+
+## D17 — Error metrics and reference whites
+- ΔE2000 (SDR) uses CIELAB with reference white = D65 × SDR peak (100 cd/m²);
+  ΔE ITP (PQ) uses absolute cd/m² via BT.2100 ICtCp and BT.2124. Errors are measured in
+  display units: prediction = M·x / k vs the (adapted, in D65 mode) LUT output.
+- Least squares runs in XYZ (fast, closed form) and seeds a Levenberg–Marquardt
+  refinement minimising Σ ΔE² (RMS). The LS-only result is kept for comparison.
+
+## D18 — Measuring any transform; test tolerances
+- Measurement works on a `Transform` trait (LUT files, or exact analytic transforms).
+- Synthetic tests check exact transforms to 1e-7 per matrix element; 65³ grid LUTs
+  are checked against a tolerance derived from that LUT's own measured interpolation
+  error (≤ 3× grid ΔE + 0.05 mean / 0.1 max), because the perceptual fit follows the
+  LUT as interpolated — which is what Resolve applies.

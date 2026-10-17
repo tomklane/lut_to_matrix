@@ -4,11 +4,13 @@
 //! This crate has no UI dependencies; the CLI and the Tauri app are thin
 //! front ends over it.
 
+pub mod analysis;
 pub mod detect;
 pub mod difference;
 pub mod fit;
 pub mod lut;
 pub mod math;
+pub mod sample;
 pub mod spaces;
 
 /// The app version, defined once in the workspace `Cargo.toml`.
