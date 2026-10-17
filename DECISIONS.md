@@ -68,3 +68,11 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - RED Log3G10: v3 (with linear segment below −0.01), the current IPP2 definition.
 - Fujifilm F-Gamut = BT.2020 primaries (F-Log data sheet Ver.1.1).
 - Blackmagic WG Gen 5 uses BMD's own white (0.3127170, 0.3290312), adapted to D65 like ACES.
+
+## D11 — LUT application
+- Inputs outside a LUT's domain are clamped (as Resolve does), but the sampler checks
+  `Lut::in_domain` first and skips such samples rather than measuring clamped output.
+- Tetrahedral interpolation is the default (Resolve's default; exact on the neutral
+  diagonal). Trilinear is an option.
+- In a Resolve shaper+3D `.cube`, DOMAIN_MIN/MAX (or LUT_1D_INPUT_RANGE) belong to the
+  shaper; the 3D table uses LUT_3D_INPUT_RANGE or [0, 1].

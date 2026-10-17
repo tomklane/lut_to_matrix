@@ -20,3 +20,6 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - BT.2408-8 middle-gray defaults (26 cd/m² PQ; 26/203 of peak for SDR).
 - colour-science fixture generator (`tools/gen_fixtures.py`) and reference tests for
   every curve, gamut matrix, CAT, PQ and DWG round trips.
+- LUT reading: `.cube` (1D, 3D, Resolve shaper+3D, DOMAIN_MIN/MAX, LUT_*_INPUT_RANGE,
+  TITLE, comments) and `.3dl` (Lustre/Flame, 10–16-bit). Tetrahedral (default) and
+  trilinear interpolation. `.cube` writer for synthetic LUTs.

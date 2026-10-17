@@ -5,6 +5,7 @@
 //! front ends over it.
 
 pub mod math;
+pub mod lut;
 pub mod spaces;
 
 /// The app version, defined once in the workspace `Cargo.toml`.
