@@ -49,4 +49,11 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Synthetic tests: matrix recovery across 10 camera/display pairs (exact and 65³),
   identity LUT → identity, P3-DCI white preserved/removed, tone-curve normalisation,
   anchor B, bracket, neutral lock, sample skipping.
+- DCTL export: DaVinci Intermediate → linear DWG → `DWG_TO_XYZ` → `M_XYZ` (blended by a
+  "Matrix Amount" slider) → `XYZ_TO_DWG` → DaVinci Intermediate, with a header stating
+  source LUT, input/output spaces, white mode, middle gray, fit error, version and date.
+- JSON and plain-text exports of M_XYZ, DWG↔XYZ, the least-squares matrix and the
+  equivalent single linear-DWG matrix.
+- `lutmatrix export` CLI command (writes .dctl, .json, .txt).
+- DCTL tests: float32 emulation vs f64, golden file, C99/C++ compile-and-run check.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.

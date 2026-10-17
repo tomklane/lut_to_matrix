@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use lutmatrix_core::analysis::{analyze, Analysis, Severity};
+use lutmatrix_core::dctl;
 use lutmatrix_core::detect::{detect, Confidence, Guess};
 use lutmatrix_core::difference::Metric;
 use lutmatrix_core::lut::Lut;
@@ -29,6 +30,15 @@ enum Cmd {
         /// Print JSON instead of text.
         #[arg(long)]
         json: bool,
+    },
+    /// Fit the matrix and write a DCTL plus JSON and text matrix files.
+    Export {
+        file: PathBuf,
+        #[command(flatten)]
+        opts: FitOpts,
+        /// Output folder (default: next to the LUT).
+        #[arg(long, short)]
+        out_dir: Option<PathBuf>,
     },
     /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
     Fit {
@@ -296,6 +306,49 @@ fn main() -> ExitCode {
             } else {
                 ExitCode::FAILURE
             }
+        }
+        Cmd::Export { file, opts, out_dir } => {
+            let lut = match Lut::load(&file) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("{}: {e}", file.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let (input, output, settings, hint) = match build(&lut, &opts) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let a = match analyze(&lut, input, output, &settings, hint) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("{}: {e}", file.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let name = lut.filename.clone().unwrap_or_else(|| "LUT.cube".into());
+            let meta = dctl::ExportMeta::from_analysis(&a, &name, &dctl::today_utc());
+            let dir = out_dir.unwrap_or_else(|| file.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+            let dctl_path = dir.join(dctl::dctl_file_name(&name));
+            let json_path = dctl_path.with_extension("json");
+            let txt_path = dctl_path.with_extension("txt");
+            let writes = [
+                (&dctl_path, dctl::generate_dctl(&a.m_xyz, &meta)),
+                (&json_path, dctl::export_json(&a, &meta)),
+                (&txt_path, dctl::export_text(&a, &meta)),
+            ];
+            for (p, body) in writes {
+                if let Err(e) = std::fs::write(p, body) {
+                    eprintln!("could not write {}: {e}", p.display());
+                    return ExitCode::FAILURE;
+                }
+                println!("wrote {}", p.display());
+            }
+            println!("{}", meta.fit_error);
+            ExitCode::SUCCESS
         }
         Cmd::Fit { file, opts, json } => {
             let lut = match Lut::load(&file) {

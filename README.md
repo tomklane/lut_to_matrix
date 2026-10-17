@@ -38,6 +38,24 @@ lutmatrix fit --json "My LUT.cube"                # full analysis incl. per-samp
 mean/RMS/p95/max error (ΔE2000 for SDR, ΔE ITP for PQ), neutral-axis error, the
 worst hues, and warnings about the LUT's tone curve.
 
+### Export a DCTL
+
+```sh
+lutmatrix export "My LUT.cube"                 # writes My_LUT_MXYZ.dctl/.json/.txt next to the LUT
+lutmatrix export -o ~/Desktop --white preserve "My LUT.cube"
+```
+
+The `.dctl` takes **DaVinci Wide Gamut / DaVinci Intermediate** in and out:
+DI → linear DWG → XYZ (`DWG_TO_XYZ`) → `M_XYZ` → linear DWG (`XYZ_TO_DWG`) → DI.
+A **Matrix Amount** slider (0–1) blends between no change and the full matrix, in XYZ.
+The `.json` and `.txt` files hold the same matrices (plus the least-squares matrix and
+the equivalent single linear-DWG matrix) for other tools.
+
+**Install in Resolve:** Project Settings → Color Management → Lookup Tables →
+*Open LUT Folder*, copy the `.dctl` there, then *Update Lists*. Apply it with the
+**DCTL** ResolveFX (or as a node LUT) on a node where the image is DWG / DaVinci
+Intermediate, before your output transform. Works with CUDA, OpenCL and Metal.
+
 Input ids: `arri_log_c3_awg3`, `arri_log_c4_awg4`, `sony_s_log3_s_gamut3`,
 `sony_s_log3_s_gamut3_cine`, `red_log3_g10_rwg`, `canon_log2_cinema_gamut`,
 `canon_log3_cinema_gamut`, `panasonic_v_log_v_gamut`, `bmd_film_gen5`,
