@@ -1,0 +1,15 @@
+[package]
+name = "lutmatrix-core"
+description = "Colour math, LUT parsing, matrix fitting and DCTL generation for LUT Matrix (no UI dependencies)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nalgebra.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

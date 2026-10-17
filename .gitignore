@@ -1,0 +1,7 @@
+/target
+**/node_modules
+/app/dist
+.DS_Store
+Thumbs.db
+*.swp
+__pycache__/
