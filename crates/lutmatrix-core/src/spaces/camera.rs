@@ -49,6 +49,7 @@ pub enum CameraSpaceId {
     FujiFLog2FGamut,
     DaVinciIntermediateDwg,
     AcesCctAp1,
+    Aces2065Ap0,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +225,15 @@ pub static CAMERA_SPACES: &[CameraSpace] = &[
         gamut: gamuts::AP1,
         gamut_name: "ACES AP1",
         keywords: &[kw("acescct", 5.0), kw("ap1", 2.0), kw("aces", 1.0)],
+    },
+    CameraSpace {
+        id: CameraSpaceId::Aces2065Ap0,
+        name: "ACES2065-1 (linear AP0)",
+        // Scene-linear: such LUTs only cover 0–1 input (about +2.5 stops over 18% gray).
+        curve: LogCurve::Linear,
+        gamut: gamuts::AP0,
+        gamut_name: "ACES AP0",
+        keywords: &[kw("aces2065", 5.0), kw("ap0", 3.0), kw_unless("aces", 1.0, &["acescct", "acescg"])],
     },
 ];
 

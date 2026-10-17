@@ -66,6 +66,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   match specific LUTs (ARRI K1S1, Ulook4b, DLook10, Goodrich, ARRI LogC4 709,
   5207 pull 2 / 2393); ACES2065-1 linear LUT input; parameter freezing and regularisation.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
+- ACES2065-1 (linear AP0) input space (`aces2065_ap0`), with detection; "709G24"-style
+  names detected as gamma 2.4 / 2.2.
 - `lutmatrix-opendrt` crate: a Rust port of OpenDRT v1.1.0 (Jed Smith, GPLv3) as used in
   Resolve (`OpenDRT_v1.1.0.1.dctl`, bundled): all look, tonescale, creative white and
   display encoding presets, every input gamut and transfer function, stickshift

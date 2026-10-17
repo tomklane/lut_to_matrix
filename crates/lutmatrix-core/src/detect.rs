@@ -181,9 +181,9 @@ enum Tf {
 
 static TRANSFER_KEYWORDS: &[(Tf, &[Keyword])] = &[
     (Tf::Pq, &[kw("st2084", 5.0), kw("smpte2084", 5.0), kw("2084", 4.0), kw("=pq", 4.0), kw("hdr10", 3.0)]),
-    (Tf::G24, &[kw("gamma24", 5.0), kw("=g24", 3.0), kw("bt1886", 4.0), kw("1886", 3.0)]),
+    (Tf::G24, &[kw("gamma24", 5.0), kw("=g24", 3.0), kw("709g24", 3.0), kw("bt1886", 4.0), kw("1886", 3.0)]),
     (Tf::G26, &[kw("gamma26", 5.0), kw("=g26", 3.0)]),
-    (Tf::G22, &[kw("gamma22", 5.0), kw("=g22", 3.0), kw("srgb", 2.0)]),
+    (Tf::G22, &[kw("gamma22", 5.0), kw("=g22", 3.0), kw("709g22", 3.0), kw("srgb", 2.0)]),
 ];
 
 fn level(top: f64, second: f64) -> (Confidence, f64) {
@@ -490,6 +490,8 @@ mod tests {
             ("F-Log_to_BT709.cube", CameraSpaceId::FujiFLogFGamut),
             ("DWG_DI_to_Rec709.cube", CameraSpaceId::DaVinciIntermediateDwg),
             ("ACEScct_to_P3D65.cube", CameraSpaceId::AcesCctAp1),
+            ("ACES2065_to_5207_pull2_K2393_D65_709G24.cube", CameraSpaceId::Aces2065Ap0),
+            ("ACES2065-1_AP0_to_Rec709.cube", CameraSpaceId::Aces2065Ap0),
             ("AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d.cube", CameraSpaceId::ArriLogC3Awg3),
         ];
         for (name, want) in cases {

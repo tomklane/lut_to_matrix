@@ -98,6 +98,15 @@ pub const DWG: Primaries = Primaries {
     white: whites::D65,
 };
 
+/// ACES AP0 (ACES2065-1). Source: SMPTE ST 2065-1:2012 §4.1 (ACES RGB primaries) /
+/// AMPAS TB-2014-004 Table 1; white = ACES.
+pub const AP0: Primaries = Primaries {
+    r: Xy::new(0.7347, 0.2653),
+    g: Xy::new(0.0, 1.0),
+    b: Xy::new(0.0001, -0.0770),
+    white: whites::ACES,
+};
+
 /// ACES AP1 (ACEScg / ACEScct). Source: AMPAS S-2014-004 (ACEScg) §4.1; white = ACES.
 pub const AP1: Primaries = Primaries {
     r: Xy::new(0.713, 0.293),

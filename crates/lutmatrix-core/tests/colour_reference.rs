@@ -52,6 +52,7 @@ fn gamut_for(key: &str) -> Primaries {
         "f_gamut" => gamuts::F_GAMUT,
         "dwg" => gamuts::DWG,
         "ap1" => gamuts::AP1,
+        "ap0" => gamuts::AP0,
         "rec709" => gamuts::REC709,
         "p3_d65" => gamuts::P3_D65,
         "p3_dci" => gamuts::P3_DCI,
@@ -115,6 +116,7 @@ fn curve_round_trip_dense() {
         LogCurve::FLog2,
         LogCurve::DaVinciIntermediate,
         LogCurve::AcesCct,
+        LogCurve::Linear,
     ]);
     for c in curves {
         // linear → code → linear across -0.01 … 64 (log-spaced above 0)
@@ -246,7 +248,7 @@ fn gamma_round_trip() {
 #[test]
 fn white_points_map_to_neutral() {
     // RGB (1,1,1) in each gamut lands on its stated white chromaticity.
-    for p in [gamuts::P3_DCI, gamuts::AP1, gamuts::BMD_WG_GEN5, gamuts::DWG] {
+    for p in [gamuts::P3_DCI, gamuts::AP1, gamuts::AP0, gamuts::BMD_WG_GEN5, gamuts::DWG] {
         let xyz = p.rgb_to_xyz() * Vec3::new(1.0, 1.0, 1.0);
         let xy = lutmatrix_core::math::Xy::from_xyz(&xyz);
         assert!((xy.x - p.white.x).abs() < 1e-14 && (xy.y - p.white.y).abs() < 1e-14);

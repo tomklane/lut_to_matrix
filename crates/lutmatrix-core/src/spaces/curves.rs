@@ -43,6 +43,8 @@ pub enum LogCurve {
     DaVinciIntermediate,
     /// ACEScct.
     AcesCct,
+    /// No curve: the code value is scene-linear (e.g. ACES2065-1).
+    Linear,
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +255,7 @@ impl LogCurve {
             LogCurve::FLog2 => "Fujifilm F-Log2".into(),
             LogCurve::DaVinciIntermediate => "DaVinci Intermediate".into(),
             LogCurve::AcesCct => "ACEScct".into(),
+            LogCurve::Linear => "Linear".into(),
         }
     }
 
@@ -334,6 +337,7 @@ impl LogCurve {
                     (x.log2() + 9.72) / 17.52
                 }
             }
+            LogCurve::Linear => x,
         }
     }
 
@@ -412,6 +416,7 @@ impl LogCurve {
                     2f64.powf(y * 17.52 - 9.72)
                 }
             }
+            LogCurve::Linear => y,
         }
     }
 }
