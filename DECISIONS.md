@@ -250,3 +250,25 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   the whole workspace is now GPL-3.0-or-later (OpenDRT's own code stays GPLv3). The
   alternatives — compiling the user's DCTL at runtime (needs a C++ toolchain on every
   machine) or a separate companion tool — were declined.
+
+## D27 — How OpenDRT is ported
+- **Which OpenDRT.** The port follows the DCTL the user runs in Resolve,
+  `OpenDRT_v1.1.0.1.dctl` (bundled unmodified in `crates/lutmatrix-opendrt/opendrt/`). It is
+  upstream commit `af68332` (2026-02-09) with three local changes: an extra "Standard 2"
+  look, a different "DaGrinchi Tonegroan" tonescale, and surround compensation off (dark)
+  for every display encoding preset (upstream uses dim for Rec.1886, bright for sRGB). We
+  match what the user sees, not upstream.
+- **Exactness over speed.** The transform is ported operation for operation in `f32`:
+  same evaluation order, no FMA, the same library calls (`powf(2, x)` stays `powf`,
+  `_exp10f` is `powf(10, x)` as in our C++ shim), literals copied digit for digit. Presets,
+  matrices, ranges and labels are generated from the DCTL (`tools/gen_opendrt_tables.py`)
+  and re-checked against it by a test. Result: bit-identical to the DCTL compiled as C++
+  on Linux for 479 configurations (every look × tonescale, creative whites, display
+  encodings, inputs, HDR sliders, 150 random stickshift sets). The C++ build matched
+  Resolve exports to ~0.15 ΔE00 earlier (D22), so the port inherits that validation.
+- **Cross-platform check.** The compile-and-compare test needs a C++ compiler (Linux and
+  macOS CI have one); a committed fixture of compiled-DCTL outputs (tolerance 1e-4
+  relative, for libm differences) checks Windows too.
+- **Not ported:** the tonescale overlay (`crv_enable`), which draws a curve on screen.
+- `Config::grey_scale` models the `lg_scale` that the LUT Match presets add (D24); it is 1
+  for stock OpenDRT.

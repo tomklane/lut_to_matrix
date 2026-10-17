@@ -66,3 +66,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   match specific LUTs (ARRI K1S1, Ulook4b, DLook10, Goodrich, ARRI LogC4 709,
   5207 pull 2 / 2393); ACES2065-1 linear LUT input; parameter freezing and regularisation.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
+- `lutmatrix-opendrt` crate: a Rust port of OpenDRT v1.1.0 (Jed Smith, GPLv3) as used in
+  Resolve (`OpenDRT_v1.1.0.1.dctl`, bundled): all look, tonescale, creative white and
+  display encoding presets, every input gamut and transfer function, stickshift
+  parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
+  committed reference fixture for platforms without a C++ compiler.

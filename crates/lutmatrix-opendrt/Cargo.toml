@@ -1,0 +1,17 @@
+[package]
+name = "lutmatrix-opendrt"
+description = "Rust port of OpenDRT v1.1.0 (Jed Smith) for LUT Matrix: transform, presets and preset DCTL writer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+# OpenDRT is distributed under the GNU GPL v3; this port is a derivative work.
+license = "GPL-3.0-only"
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+regex.workspace = true
+serde_json.workspace = true

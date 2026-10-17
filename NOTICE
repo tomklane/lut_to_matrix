@@ -8,5 +8,8 @@ version 3 of the License, or (at your option) any later version. See LICENSE.
 It includes a Rust port of, and generates modified copies of, OpenDRT v1.1.0:
   OpenDRT (c) Jed Smith — https://github.com/jedypod/open-display-transform
   Licensed under the GNU General Public License v3.
-The port lives in crates/lutmatrix-opendrt; the original DCTL is included there
-unmodified (crates/lutmatrix-opendrt/opendrt/OpenDRT_v1.1.0.1.dctl).
+The port lives in crates/lutmatrix-opendrt; the DCTL it follows is included there
+unmodified (crates/lutmatrix-opendrt/opendrt/OpenDRT_v1.1.0.1.dctl). That file is
+upstream OpenDRT v1.1.0 (commit af68332) with local changes made before it reached this
+project: an added "Standard 2" look, a different "DaGrinchi Tonegroan" tonescale, and
+surround compensation set to dark for every display encoding preset.
