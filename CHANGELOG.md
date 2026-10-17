@@ -70,6 +70,9 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fit`): fits every OpenDRT look parameter plus grey to a LUT, with safety checks (range,
   exposure-sweep luminance reversals with automatic brilliance freeze, smoothness vs stock
   looks). Replaces the Python/C++ tooling for fitting.
+- `presets/opendrt/`: OpenDRT with eight LUT Match presets refitted by the Rust fitter
+  (adds 5201 and 5219 pull 2 / 2393), plus the fit reports.
+- CI requires a C++ compiler on macOS and Linux so the OpenDRT parity test cannot skip.
 - `lutmatrix opendrt build`: writes the bundled OpenDRT DCTL with LUT Match look presets
   (per-preset grey only with Tonescale Preset = USE LOOK PRESET); reads new and old fit
   files. The written DCTL is compiled and checked against the port in tests.

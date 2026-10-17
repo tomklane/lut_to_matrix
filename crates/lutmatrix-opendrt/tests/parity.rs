@@ -234,6 +234,10 @@ fn harness_source(dctl: &str) -> (String, Vec<(String, bool)>) {
 fn cxx() -> Option<String> {
     let cxx = std::env::var("CXX").unwrap_or_else(|_| "c++".into());
     let ok = Command::new(&cxx).arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+    assert!(
+        ok || !std::env::var_os("LUTMATRIX_REQUIRE_CXX").is_some_and(|v| !v.is_empty()),
+        "LUTMATRIX_REQUIRE_CXX is set but no C++ compiler '{cxx}' was found"
+    );
     ok.then_some(cxx)
 }
 
