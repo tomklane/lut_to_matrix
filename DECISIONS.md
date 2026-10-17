@@ -38,3 +38,33 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - AP1 uses the ACES white (≈D60). Input XYZ is chromatically adapted to D65 (Bradford)
   so "neutral in" is always D65, matching Resolve's colour space transform behaviour.
   Option to use unadapted XYZ.
+
+## D7 — Default display middle gray
+- **PQ:** 26 cd/m² — ITU-R BT.2408-8 (11/2024) §2.2 Table 1, "Grey Card (18%)", 38% PQ.
+  (HDR Reference White 203 cd/m², 58% PQ.)
+- **SDR gamma:** no ITU value exists. Default = 26/203 of SDR peak ≈ 12.81% (12.8 cd/m²
+  at 100 nits; code ≈ 0.393 / 0.425 / 0.453 at gamma 2.2 / 2.4 / 2.6). Same placement
+  relative to reference white as BT.2408. A convention, so it is a setting.
+- SDR outputs carry a nominal peak (default 100 cd/m²) so all display-linear values
+  are in cd/m².
+
+## D8 — RGB↔XYZ matrices derived from primaries
+- Every gamut's NPM is computed in f64 from its published xy primaries and white
+  (SMPTE RP 177), not copied from rounded published matrices. Tests confirm the derived
+  matrices agree with every manufacturer-published matrix to its printed precision
+  (DWG to 8 decimals per the BMD document; AWG4 to 10 decimals).
+
+## D9 — Manufacturer constants kept verbatim, including their small gaps
+- Panasonic V-Log's decode breakpoint (0.181) is a rounding of the encode breakpoint
+  (0.1809997); Fujifilm's F-Log/F-Log2 decode breakpoints don't meet the encode
+  breakpoints exactly (~1e-5 overlap in deep shadow). We use the published values as
+  printed; tests allow exactly these gaps at the breakpoints. Effect on fitting: nil
+  (samples sit around middle gray).
+
+## D10 — Camera curve variants
+- ARRI LogC3: SUP 3.x, "linear scene exposure factor" parameter table (EI 160–1600);
+  EI is a setting (default 800).
+- Canon Log 2/3: v1.2 ("Full %") formulas, which output full-range code values directly.
+- RED Log3G10: v3 (with linear segment below −0.01), the current IPP2 definition.
+- Fujifilm F-Gamut = BT.2020 primaries (F-Log data sheet Ver.1.1).
+- Blackmagic WG Gen 5 uses BMD's own white (0.3127170, 0.3290312), adapted to D65 like ACES.
