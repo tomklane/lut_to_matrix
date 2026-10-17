@@ -12,6 +12,16 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Analysis JSON writes matrices as row-major nested arrays.
 
 ### Added
+- Desktop app (Tauri v2 + Svelte 5, `app/`): drag-and-drop or open a LUT; detected input
+  and output spaces with confidence, reasons and overrides (ARRI EI, PQ peak); fit
+  settings (white mode, anchor, bracket, metric, fit through a display transform,
+  advanced options); live matrix, error statistics, reference comparison, before/after
+  swatches per sample and exposure level, report; Export DCTL… and Copy Matrix; OpenDRT
+  Match with safety checks and Save to Library; preset library (rename, export, import,
+  remove, build OpenDRT DCTL); About; remembered settings; light/dark mode;
+  macOS-style overlay title bar. LUT path accepted on the command line.
+- `Bundle` GitHub workflow: unsigned macOS universal .dmg and Windows NSIS/MSI artifacts.
+- CI and `tools/check.sh` type-check and build the front end; Linux CI installs WebKitGTK.
 - Cargo workspace with `lutmatrix-core` (library) and `lutmatrix-cli` crates; version
   defined once in the root `Cargo.toml`.
 - Project docs: `CLAUDE.md`, `DECISIONS.md`, `README.md`, the original brief.

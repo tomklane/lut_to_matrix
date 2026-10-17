@@ -305,3 +305,24 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   `opendrt fit` saves there by default; `opendrt build` reads only from there.
 - The stock OpenDRT looks/tonescales remain: they are part of OpenDRT itself (the bundled
   DCTL), used as fit starting points and needed to reproduce Resolve's output.
+
+## D30 — Desktop app (stage 4)
+- Tauri v2 with a Svelte 5 + TypeScript front end (as the brief suggests): the Rust core is
+  used directly, the bundle is small, and WKWebView/WebView2 render the same HTML/CSS on
+  macOS and Windows. The front end only lays out and holds state; every colour
+  computation is a Tauri command over `lutmatrix-core` (no colour math in JS).
+- Apple HIG styling by hand (no UI kit): system font stack (SF Pro / Segoe UI Variable),
+  grouped-list settings like System Settings, segmented controls, native `<select>`
+  pop-ups, switches, sidebar layout, overlay title bar on macOS, light/dark from
+  `prefers-color-scheme`, reduced motion respected.
+- The analysis re-runs automatically (debounced) on any change; stale results are
+  dropped. Export and Copy use the analysis on screen (kept in the backend), so the file
+  always matches what is shown. Long jobs run on blocking threads.
+- Remembered settings: `prefs.json` in the same per-user data folder as the preset library
+  (D29); LUT-specific overrides are not remembered (each LUT is detected afresh).
+- Swatches: a hue × saturation grid per exposure level, each tile split LUT | matrix
+  (or scene | LUT), with a detail panel; clearer to compare than a ring at 36 × 4.
+- Development: in a plain browser the front end talks to a mock backend fed by
+  git-ignored fixtures (`app/dev-fixtures/`), so the UI can be iterated and screenshotted
+  without a native build; production bundles never include the mock.
+- Bundles are unsigned (no certificates, user decision); README explains first launch.

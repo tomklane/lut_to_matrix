@@ -37,7 +37,12 @@ crates/lutmatrix-opendrt   Rust port of OpenDRT v1.1.0 (GPLv3). f32, operation-f
 crates/lutmatrix-cli       `lutmatrix` binary (inspect, fit, export)
 tools/                     Python (colour-science) scripts that generate test fixtures
 crates/lutmatrix-core/tests/fixtures   committed reference values
-app/                       Tauri v2 app (stage 4)
+app/                       Tauri v2 desktop app (D30)
+  src/                     Svelte 5 + TS front end: App.svelte, views/, lib/ (api.ts mirrors
+                           the Rust types; state.svelte.ts; platform.ts dialogs/clipboard/drops;
+                           mock.ts dev-only backend fed by git-ignored dev-fixtures/)
+  src-tauri/               `lutmatrix-app` crate: commands in src/lib.rs, tauri.conf.json
+
 ```
 
 ## Conventions
@@ -64,7 +69,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p lutmatrix-cli -- inspect path/to/file.cube
 cargo run --release -p lutmatrix-cli -- fit path/to/file.cube [--white d65] [--json]
-tools/check.sh   # clippy + tests; run before every commit
+tools/check.sh   # front-end type check + build, clippy, tests; run before every commit
+cd app && npx tauri dev    # run the desktop app (Linux needs WebKitGTK dev packages)
 ```
 Regenerate fixtures (needs `pip install colour-science`):
 ```

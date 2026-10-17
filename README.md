@@ -4,16 +4,41 @@ Extract the colour transform of a camera-log → display LUT as a 3x3 matrix in 
 CIE XYZ, and export it as a DaVinci Resolve DCTL (DaVinci Wide Gamut / DaVinci
 Intermediate in and out).
 
-> Status: in development (stage 1 of 5: LUT parsing and colour math).
+It also fits OpenDRT's look parameters to a LUT and keeps the results as presets on your
+computer.
+
+> Status: in development — stage 4 of 5 (desktop app). Installers come in stage 5; test
+> builds can be made with the *Bundle* GitHub workflow (unsigned).
+
+## The app
+
+Drop a LUT on the window (or *Open LUT…*). The detected camera input and display output
+appear with how sure the detection is; change them with the pop-up menus. The matrix,
+its error statistics and before/after swatches of every sample update as you change
+anything. *Export DCTL…* writes the DCTL plus .json and .txt matrix files; *Copy Matrix*
+puts the 3×3 on the clipboard. *OpenDRT Match* fits OpenDRT to the LUT and saves the
+result to your local preset library; *Presets* builds an OpenDRT DCTL from it. Settings
+are remembered between sessions. Light and dark mode follow the system.
+
+The bundles are not signed. On macOS, the first time: right-click the app → *Open*
+(or `xattr -cr "/Applications/LUT Matrix.app"`). On Windows, SmartScreen → *More info* →
+*Run anyway*.
 
 ## Build
 
-Requirements: Rust (stable, 1.80+).
+Requirements: Rust (stable, 1.80+), Node.js 20+. On Linux also the WebKitGTK packages
+(`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev`).
 
 ```sh
-cargo build --release
-cargo test --workspace
+cd app && npm ci && cd ..
+tools/check.sh                      # type-check + build the front end, clippy, all tests
+cd app && npx tauri dev             # run the app with live reload
+cd app && npx tauri build           # .app/.dmg on macOS, NSIS/MSI installers on Windows
+cargo build --release -p lutmatrix-cli   # the command-line tool only
 ```
+
+`npm run dev` in `app/` runs the interface in a browser against a development mock of the
+backend (fixtures in `app/dev-fixtures/`, not committed).
 
 ## Usage (CLI)
 
@@ -122,4 +147,3 @@ Reference values come from colour-science; regenerate with
 GPL-3.0-or-later (see `LICENSE` and `NOTICE`). The app includes a Rust port of
 [OpenDRT](https://github.com/jedypod/open-display-transform) by Jed Smith (GPLv3).
 
-Installer and app usage instructions arrive with later stages.

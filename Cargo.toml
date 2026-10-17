@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lutmatrix-core", "crates/lutmatrix-opendrt", "crates/lutmatrix-cli"]
+members = ["crates/lutmatrix-core", "crates/lutmatrix-opendrt", "crates/lutmatrix-cli", "app/src-tauri"]
 
 # The single source of truth for the app version. Every crate (and the Tauri
 # app, from stage 4) inherits it; it is stamped into every exported DCTL.
