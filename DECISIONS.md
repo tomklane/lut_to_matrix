@@ -228,3 +228,18 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   bit-identical. The preset grey (lg_scale) applies only with Tonescale Preset = USE LOOK
   PRESET (user decision): any stock tonescale preset gives every look the same exposure,
   set by Display Grey Luminance, exactly as for the stock looks.
+
+## D25 — 5207 pull 2 / 2393 preset from a linear-ACES LUT
+- `ACES2065_to_5207_pull2_K2393_D65_709G24.cube` (Resolve-generated, 65³, no shaper) takes
+  **linear ACES2065-1** in 0–1, i.e. only up to +2.5 stops over 18% gray (output there
+  ≈ 58 nits); brighter footage is clipped by the LUT itself. Identified from the gray
+  axis: linear gives 18% → 9.5 nits; any log reading gives 18–32 nits.
+- Fit input "aces2065": scene XYZ (D65) → Bradford to ACES white → AP0, linear; only
+  samples inside the LUT domain are used (469 of 531).
+- With all parameters free the fit (chart 2.08 ΔE00) left brilliance unconstrained in the
+  unsampled highlights: a 0.35 % luminance reversal on saturated highlights in exposure
+  sweeps. Freezing brilliance at the start preset (`ODRT_FIT_FREEZE=_brl`) removes it
+  (chart 2.31 ΔE00, vs 4.99 for Standard/ACES-2.0); that version ships. Exposure sweeps
+  (−4…+10 stops, saturated hues) are now part of the preset safety check.
+- A LUT exported with a log input (e.g. from an ACEScct node, or with a shaper) would let
+  the highlight roll-off be fitted too.

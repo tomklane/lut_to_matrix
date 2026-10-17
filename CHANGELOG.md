@@ -62,5 +62,6 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   LUT) reproduces the source LUT, exposure matched, with a report of the gain over the
   DRT alone; the DCTL header names the reference.
 - `tools/opendrt_presets/`: tooling and fitted parameters for OpenDRT look presets that
-  match specific LUTs.
+  match specific LUTs (ARRI K1S1, Ulook4b, DLook10, Goodrich, ARRI LogC4 709,
+  5207 pull 2 / 2393); ACES2065-1 linear LUT input; parameter freezing and regularisation.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
