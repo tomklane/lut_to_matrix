@@ -11,6 +11,8 @@ use lutmatrix_core::difference::Metric;
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
 use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
+use lutmatrix_opendrt::writer::{lut_match_dctl, sanitize_name, LutMatchPreset};
+use lutmatrix_opendrt::Config as OdrtConfig;
 use lutmatrix_core::sample::{GrayAnchor, Settings, WhiteMode};
 use lutmatrix_core::spaces::{CameraSpaceId, DisplayGamut, DisplayTransfer, InputSpace, OutputSpace};
 
@@ -129,6 +131,47 @@ enum OdrtCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Write OpenDRT (the bundled v1.1.0.1 DCTL) with one LUT Match look preset per fit.
+    Build {
+        /// Fit results from `lutmatrix opendrt fit` (older tools/opendrt_presets fits work too).
+        fits: Vec<PathBuf>,
+        /// Menu name for each fit, in order (default: "LUT Match <LUT name>").
+        #[arg(long = "name")]
+        names: Vec<String>,
+        /// Output DCTL (default: OpenDRT_v1.1.0.1_LUTmatch.dctl in the current folder).
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        /// Extra line for the DCTL header.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+}
+
+/// A LUT Match preset from a fit file: this CLI's JSON, or the Python tool's.
+fn load_preset(path: &std::path::Path, name: Option<&String>) -> Result<LutMatchPreset, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (look, grey, source) = if let Some(cfg) = v.get("config") {
+        let cfg: OdrtConfig = serde_json::from_value(cfg.clone()).map_err(|e| format!("{}: {e}", path.display()))?;
+        (cfg.look, cfg.grey_nits * cfg.grey_scale, v["lut_name"].as_str().unwrap_or("?").to_string())
+    } else if let Some(params) = v.get("params").and_then(|p| p.as_object()) {
+        let mut look = OdrtConfig::default().look;
+        let mut grey = None;
+        for (k, x) in params {
+            let x = x.as_f64().ok_or_else(|| format!("{}: {k} is not a number", path.display()))? as f32;
+            if k == "tn_Lg" {
+                grey = Some(x);
+            } else if !look.set(k.trim_start_matches('_'), x) {
+                return Err(format!("{}: unknown OpenDRT parameter {k}", path.display()));
+            }
+        }
+        (look, grey.ok_or_else(|| format!("{}: no tn_Lg", path.display()))?, v["lut"].as_str().unwrap_or("?").to_string())
+    } else {
+        return Err(format!("{}: not an OpenDRT fit file", path.display()));
+    };
+    let stem = std::path::Path::new(&source).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = name.cloned().unwrap_or_else(|| format!("LUT Match {stem}"));
+    Ok(LutMatchPreset { name, look, grey_nits: grey, source })
 }
 
 #[derive(Args)]
@@ -380,6 +423,24 @@ fn run_opendrt(cmd: OdrtCmd) -> Result<(), String> {
             std::fs::write(&path, body).map_err(|e| format!("could not write {}: {e}", path.display()))?;
             if !json {
                 println!("wrote {}", path.display());
+            }
+            Ok(())
+        }
+        OdrtCmd::Build { fits, names, out, note } => {
+            if fits.is_empty() {
+                return Err("give at least one fit file".into());
+            }
+            if names.len() > fits.len() {
+                return Err("more --name values than fit files".into());
+            }
+            let presets =
+                fits.iter().enumerate().map(|(i, f)| load_preset(f, names.get(i))).collect::<Result<Vec<_>, _>>()?;
+            let dctl = lut_match_dctl(&presets, &note).map_err(|e| e.to_string())?;
+            let path = out.unwrap_or_else(|| PathBuf::from("OpenDRT_v1.1.0.1_LUTmatch.dctl"));
+            std::fs::write(&path, dctl).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            println!("wrote {} with {} LUT Match preset(s):", path.display(), presets.len());
+            for p in &presets {
+                println!("  {:<28} grey {:.2} nits  ({})", sanitize_name(&p.name), p.grey_nits, p.source);
             }
             Ok(())
         }

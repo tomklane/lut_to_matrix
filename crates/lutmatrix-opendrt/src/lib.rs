@@ -10,12 +10,14 @@
 //!   the DCTL's preset menus.
 //! - [`OpenDrt`]: the transform for one [`Config`], with the per-frame constants
 //!   precomputed.
+//! - [`writer::lut_match_dctl`]: the DCTL with extra "LUT Match" look presets.
 //!
 //! Not ported: the tonescale overlay (`crv_enable`), which only draws a curve on screen.
 
 mod params;
 pub mod tables;
 mod transform;
+pub mod writer;
 
 pub use params::{
     Config, DisplayGamut, Eotf, InputGamut, InputOetf, Kind, LookParams, ParamInfo, Presets, ToneParams,

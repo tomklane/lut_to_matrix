@@ -177,7 +177,12 @@ impl Config {
     /// DCTL defaults (DaVinci Wide Gamut / Intermediate, 100 nits peak, 10 nits grey);
     /// change the fields afterwards as needed. None if an index is out of range.
     pub fn from_presets(p: &Presets) -> Option<Config> {
-        let mut look = LookParams::preset(p.look)?;
+        Config::from_look(LookParams::preset(p.look)?, p)
+    }
+
+    /// [`Config::from_presets`] with `look` in place of the look preset `p.look`.
+    pub fn from_look(look: LookParams, p: &Presets) -> Option<Config> {
+        let mut look = look;
         if p.tonescale != 0 {
             ToneParams::preset(p.tonescale)?.apply_to(&mut look);
         }

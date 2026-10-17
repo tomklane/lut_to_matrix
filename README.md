@@ -66,6 +66,19 @@ Fits every OpenDRT v1.1.0 look parameter and the Display Grey Luminance so that 
 report compares the stock Standard look, the best unmodified preset and the fit, and runs
 safety checks (output range, luminance never falling as exposure rises, smoothness).
 
+Then write OpenDRT with your fits as extra Look Presets:
+
+```sh
+lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl \
+    --name "LUT Match K1S1" "K1S1_opendrt_match.json" \
+    --name "LUT Match Ulook4b" "Ulook4b_opendrt_match.json"
+```
+
+The DCTL is the bundled OpenDRT v1.1.0.1 with the stock presets unchanged. Each LUT Match
+preset carries its own middle-gray level, used only with *Tonescale Preset = USE LOOK
+PRESET*; with any stock tonescale every look has the exposure of the *Display Grey
+Luminance* slider. Install it like any DCTL; use DaVinci Wide Gamut / Intermediate in.
+
 ### Export a DCTL
 
 ```sh

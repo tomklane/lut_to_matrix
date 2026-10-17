@@ -191,12 +191,12 @@ fn cases() -> Vec<Case> {
 /* ---- C++ harness ---- */
 
 /// The DCTL with every UI parameter turned into a settable static (as `make_harness.py`).
-fn harness_source() -> (String, Vec<(String, bool)>) {
+fn harness_source(dctl: &str) -> (String, Vec<(String, bool)>) {
     let re = Regex::new(r"^(//\s*)?DEFINE_UI_PARAMS\((\w+),\s*([^,]*),\s*(\w+),\s*([^,]+?)(?:,\s*(.*))?\)\s*$").unwrap();
     let mut params: Vec<(String, bool)> = Vec::new(); // (name, is_float)
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
-    for line in DCTL_SOURCE.lines() {
+    for line in dctl.lines() {
         let st = line.trim();
         if st == "// #define INIT_PARAMS" {
             continue; // set with -DINIT_PARAMS for the stickshift build
@@ -237,8 +237,8 @@ fn cxx() -> Option<String> {
     ok.then_some(cxx)
 }
 
-fn build_harness(cxx: &str, dir: &Path) -> (PathBuf, PathBuf) {
-    let (src, params) = harness_source();
+fn build_harness(cxx: &str, dir: &Path, dctl: &str) -> (PathBuf, PathBuf) {
+    let (src, params) = harness_source(dctl);
     std::fs::write(dir.join("opendrt_harness.dctl"), src).unwrap();
     let table: Vec<String> = params
         .iter()
@@ -331,6 +331,62 @@ fn compare(name: &str, cfg: &Config, inputs: &[[f32; 3]], want: &[[f32; 3]], tol
     worst
 }
 
+/// The DCTL written with two extra LUT Match presets: compiled, every stock look is
+/// unchanged and the new ones match the port (with `grey_scale` = `lg_scale` only for
+/// Tonescale Preset = USE LOOK PRESET).
+#[test]
+fn lut_match_dctl_matches_port() {
+    use lutmatrix_opendrt::writer::{lut_match_dctl, LutMatchPreset};
+    let Some(cxx) = cxx() else {
+        eprintln!("SKIPPED: no C++ compiler (set CXX)");
+        return;
+    };
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let mut presets = Vec::new();
+    for (name, grey) in [("LUT Match One", 6.3f32), ("LUT Match Two", 14.7)] {
+        let mut a = LookParams::preset(rng.index(9)).unwrap().to_array();
+        for (k, info) in LookParams::info().iter().enumerate() {
+            let v = info.min + rng.next() * (info.max - info.min);
+            a[k] = if info.kind == lutmatrix_opendrt::Kind::Float { v } else { v.round() };
+        }
+        presets.push(LutMatchPreset { name: name.into(), look: LookParams::from_array(&a), grey_nits: grey, source: "test".into() });
+    }
+    let dctl = lut_match_dctl(&presets, "test build").unwrap();
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("opendrt_lutmatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (exe, _) = build_harness(&cxx, &dir, &dctl);
+    let mut cases = Vec::new();
+    for look in 0..11 {
+        for tonescale in [0, 4, 11] {
+            for display_encoding in [0, 6] {
+                for slider in [10.0f32, 7.0] {
+                    let p = Presets { look, tonescale, display_encoding, ..Presets::default() };
+                    let mut case = if look < 9 {
+                        preset_case(String::new(), p, |c| c.grey_nits = slider)
+                    } else {
+                        let mut c = preset_case(String::new(), Presets { look: 0, ..p }, |_| {});
+                        c.cfg = presets[look - 9].config(&p, slider).unwrap();
+                        c.cpp[0].1 = look as f64;
+                        c.cpp.retain(|(k, _)| k != "tn_Lg");
+                        c.cpp.push(("tn_Lg".into(), slider as f64));
+                        c
+                    };
+                    case.name = format!("look {look} tonescale {tonescale} encoding {display_encoding} slider {slider}");
+                    cases.push(case);
+                }
+            }
+        }
+    }
+    let sel: Vec<&Case> = cases.iter().collect();
+    let inputs: Vec<Vec<[f32; 3]>> = sel.iter().map(|c| input_set(&c.cfg)).collect();
+    let outs = run_harness(&exe, &sel, &inputs);
+    let mut worst = 0.0f32;
+    for ((case, inp), want) in sel.iter().zip(&inputs).zip(&outs) {
+        worst = worst.max(compare(&case.name, &case.cfg, inp, want, 2e-5));
+    }
+    eprintln!("LUT Match DCTL vs port: {} cases, worst relative difference {worst:.2e}", cases.len());
+}
+
 #[derive(Serialize, Deserialize)]
 struct FixtureCase {
     name: String,
@@ -347,7 +403,7 @@ fn matches_compiled_dctl() {
     };
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("opendrt_parity");
     std::fs::create_dir_all(&dir).unwrap();
-    let (presets_exe, stick_exe) = build_harness(&cxx, &dir);
+    let (presets_exe, stick_exe) = build_harness(&cxx, &dir, DCTL_SOURCE);
     let all = cases();
     let mut worst = 0.0f32;
     let mut fixture = Vec::new();
