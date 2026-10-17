@@ -219,16 +219,44 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Failure details go to ::error:: annotations (one message, %0A = newline) so they
+          # can be read from the run summary as well as the log.
+          function Fail([string]$why, [string]$log) {
+            $lines = @($why)
+            if ($log -and (Test-Path $log)) {
+              $lines += Select-String -Path $log -Encoding Unicode -Pattern 'Return value 3|error|INSTALLDIR|APPLICATIONFOLDER|Note:' |
+                Select-Object -Last 25 | ForEach-Object { $_.Line.Trim() }
+            }
+            Write-Host ("::error title=MSI smoke test::" + (($lines | ForEach-Object { $_ -replace '%','%25' -replace '::',': :' }) -join '%0A'))
+            exit 1
+          }
           $msi = (Get-Item "dist/LUT-Matrix_$env:VERSION`_Windows_x64.msi").FullName
-          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart /l*v msi-install.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; throw "msiexec /i exit code $($p.ExitCode)" }
-          $dir = Join-Path $env:ProgramFiles 'LUT Matrix'
-          Get-ChildItem $dir | Format-Table Name, Length
-          if (-not (Get-ChildItem $dir -Filter *.exe)) { throw "no app .exe in $dir" }
-          $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
+          $log = Join-Path $env:RUNNER_TEMP 'msi-install.log'
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$log`"") -Wait -PassThru
+          if ($p.ExitCode -notin 0, 3010) { Fail "msiexec /i exit code $($p.ExitCode)" $log }
+
+          # Where did it go? Ask Windows (uninstall entry), then the log, then look.
+          $entry = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+                   Where-Object { $_.DisplayName -like 'LUT Matrix*' } | Select-Object -First 1
+          if (-not $entry) { Fail 'installed, but no "LUT Matrix" entry under Uninstall in the registry' $log }
+          Write-Host "registry: $($entry.DisplayName) $($entry.DisplayVersion) at '$($entry.InstallLocation)'"
+          $dirs = @($entry.InstallLocation) +
+                  (Select-String -Path $log -Encoding Unicode -Pattern 'Property\(S\): INSTALLDIR = (.+)$' |
+                     ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() }) +
+                  @((Join-Path $env:ProgramFiles 'LUT Matrix'), (Join-Path ${env:ProgramFiles(x86)} 'LUT Matrix'))
+          $dir = $dirs | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $dir) { Fail ("no install folder found; looked in: " + ($dirs -join '; ')) $log }
+          $exe = Get-ChildItem $dir -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { Fail "no .exe under $dir" $log }
+          Write-Host "installed $($exe.FullName), version $($exe.VersionInfo.ProductVersion)"
+
+          $p = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
+          if ($p.ExitCode -notin 0, 3010) { Fail "msiexec /x exit code $($p.ExitCode)" $null }
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: LUT-Matrix-${{ matrix.name }}
           path: dist/*
