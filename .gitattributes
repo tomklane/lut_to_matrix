@@ -1,0 +1,4 @@
+# Keep reference files byte-identical on every platform.
+*.dctl text eol=lf
+*.json text eol=lf
+*.cube text eol=lf
