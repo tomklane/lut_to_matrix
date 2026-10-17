@@ -214,3 +214,15 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   7e-5 (OpenDRT) and reproduce the chart exports to 0.17 ΔE00 (CST).
 - Analysis JSON now writes matrices row-major (`[[r0],[r1],[r2]]`); nalgebra's default is
   a flat column-major list, which a reader transposed during this work.
+
+## D24 — OpenDRT "LUT Match" presets (user request 2026-10-16)
+- Separate from the matrix app: OpenDRT's full look parameter set was fitted directly to
+  each LUT (tone and colour, across exposure), via a stickshift build of the user's
+  OpenDRT v1.1.0 DCTL compiled as C++. Tooling in `tools/opendrt_presets/`; OpenDRT
+  itself (GPLv3) is not in this repo.
+- Held-out ColorChecker (user's Resolve exports), mean ΔE00 vs the LUT, no exposure
+  matching: K1S1 2.40 (Standard/ACES-2.0) → 0.65; Ulook4b 10.62 → 2.92. Far closer than a
+  3×3 matrix can get, because the tonescale and hue/purity behaviour are fitted too.
+- Delivered as a modified DCTL with look presets 9–13 and a per-preset grey scale
+  (`lg_scale`, so Display Grey Luminance 10 = the fitted grey); original presets are
+  bit-identical. Requires Tonescale Preset and Creative White = "USE LOOK PRESET".

@@ -61,4 +61,6 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so that the DRT that follows the DCTL (a CST, OpenDRT, … exported from Resolve as a
   LUT) reproduces the source LUT, exposure matched, with a report of the gain over the
   DRT alone; the DCTL header names the reference.
+- `tools/opendrt_presets/`: tooling and fitted parameters for OpenDRT look presets that
+  match specific LUTs.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
