@@ -88,4 +88,9 @@ LUTMATRIX_SAMPLE_LUTS="/path/to/luts" cargo test --workspace
 Reference values come from colour-science; regenerate with
 `python3 tools/gen_fixtures.py` (requires `pip install colour-science`).
 
-Installer, app and DCTL usage instructions arrive with later stages.
+## License
+
+GPL-3.0-or-later (see `LICENSE` and `NOTICE`). The app includes a Rust port of
+[OpenDRT](https://github.com/jedypod/open-display-transform) by Jed Smith (GPLv3).
+
+Installer and app usage instructions arrive with later stages.

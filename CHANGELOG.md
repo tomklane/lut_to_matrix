@@ -7,6 +7,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- License: GPL-3.0-or-later (was unlicensed), to include a port of OpenDRT (GPLv3).
 - D65 is now the default white mode (CLI `--white` defaults to `d65`).
 - Analysis JSON writes matrices as row-major nested arrays.
 

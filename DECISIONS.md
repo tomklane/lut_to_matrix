@@ -243,3 +243,10 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   (−4…+10 stops, saturated hues) are now part of the preset safety check.
 - A LUT exported with a log input (e.g. from an ACEScct node, or with a shaper) would let
   the highlight roll-off be fitted too.
+
+## D26 — GPLv3 and an in-app OpenDRT port (user decision 2026-10-16)
+- To fit OpenDRT presets inside the app, OpenDRT v1.1.0 (Jed Smith, GPLv3) is ported to
+  Rust (`crates/lutmatrix-opendrt`). Distributing that makes the app a derivative work, so
+  the whole workspace is now GPL-3.0-or-later (OpenDRT's own code stays GPLv3). The
+  alternatives — compiling the user's DCTL at runtime (needs a C++ toolchain on every
+  machine) or a separate companion tool — were declined.
