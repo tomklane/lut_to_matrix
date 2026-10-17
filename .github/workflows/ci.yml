@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # the Release workflow runs these same tests
 
 env:
   CARGO_TERM_COLOR: always

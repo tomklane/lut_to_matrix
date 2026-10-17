@@ -1,0 +1,283 @@
+name: Release
+
+# Builds the installers and the command-line tool, checks them, and (when releasing)
+# puts them on a DRAFT GitHub Release. Nothing is public until you press Publish on the
+# release page; publishing creates the tag. See "Releasing" in README.md.
+#
+# - Run it from the Actions tab ("Run workflow"):
+#     draft release unticked → installers as workflow artifacts only (test builds)
+#     draft release ticked   → also a draft release v<version> with the files attached
+# - Or push a tag v<version> (it must match Cargo.toml) → draft release.
+#
+# The bundles are not signed with an Apple Developer ID or a Windows certificate (D31).
+# The macOS app is ad-hoc signed so Apple Silicon Macs accept it after "Open Anyway".
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Create or update the draft GitHub Release for this version"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to see draft releases
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      release: ${{ steps.v.outputs.release }}
+      skip: ${{ steps.v.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Version, tag and release checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          DRAFT_RELEASE: ${{ inputs.draft_release }}
+        run: |
+          set -euo pipefail
+          version=$(python3 tools/release_notes.py --version)
+          tag="v$version"
+          release=false
+          skip=false
+          if [ "$EVENT" = push ]; then
+            if [ "$REF_NAME" != "$tag" ]; then
+              echo "::error::Tag $REF_NAME does not match the version in Cargo.toml ($version). Tag v$version, or change the version first."
+              exit 1
+            fi
+            release=true
+          elif [ "$DRAFT_RELEASE" = true ]; then
+            release=true
+          fi
+          state=$(gh release view "$tag" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo none)
+          echo "Version $version, tag $tag, existing release: $state"
+          if [ "$state" = published ]; then
+            if [ "$EVENT" = push ]; then
+              # Publishing a draft creates the tag, which lands here: nothing to do.
+              echo "Release $tag is already published; nothing to build."
+              skip=true
+            elif [ "$release" = true ]; then
+              echo "::error::Release $tag is already published. Bump the version in Cargo.toml (and CHANGELOG.md) for a new release."
+              exit 1
+            fi
+          fi
+          if [ "$release" = true ] && [ "$skip" = false ]; then
+            python3 tools/release_notes.py "$version" > /dev/null   # fails without a CHANGELOG section
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          {
+            echo "version=$version"; echo "tag=$tag"; echo "prerelease=$prerelease"
+            echo "release=$release"; echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+  test:
+    name: test
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: windows
+            os: windows-latest
+            targets: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install front-end packages
+        working-directory: app
+        run: npm ci --no-audit --no-fund
+
+      # ---------------- macOS ----------------
+      - name: Build the app (universal .app + .dmg, ad-hoc signed)
+        if: runner.os == 'macOS'
+        working-directory: app
+        run: npx tauri build --target universal-apple-darwin --bundles app,dmg
+      - name: Build the command-line tool (universal)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p lutmatrix-cli --target aarch64-apple-darwin --target x86_64-apple-darwin
+          mkdir -p cli && lipo -create -output cli/lutmatrix \
+            target/aarch64-apple-darwin/release/lutmatrix target/x86_64-apple-darwin/release/lutmatrix
+          codesign --force --sign - cli/lutmatrix
+          cli/lutmatrix --version
+      - name: Collect and check the macOS files
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          dmg=$(ls target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          cp "$dmg" "dist/LUT-Matrix_${VERSION}_macOS_universal.dmg"
+          cp README.md LICENSE NOTICE cli/
+          tar -czf "dist/lutmatrix-cli_${VERSION}_macOS_universal.tar.gz" -C cli .
+
+          # Open the .dmg the way a user would and check what's inside.
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "dist/LUT-Matrix_${VERSION}_macOS_universal.dmg"
+          app="$mnt/LUT Matrix.app"
+          test -d "$app" || { echo "::error::LUT Matrix.app not in the .dmg"; ls -la "$mnt"; exit 1; }
+          test -L "$mnt/Applications" || echo "::warning::no Applications shortcut in the .dmg"
+          plist="$app/Contents/Info.plist"
+          shown=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$plist")
+          [ "$shown" = "$VERSION" ] || { echo "::error::app version $shown != $VERSION"; exit 1; }
+          exe="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$plist")"
+          archs=$(lipo -archs "$exe"); echo "app architectures: $archs"
+          case "$archs" in *arm64*x86_64*|*x86_64*arm64*) ;; *) echo "::error::not universal: $archs"; exit 1 ;; esac
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -E 'Signature=adhoc|Identifier='
+          hdiutil detach "$mnt"
+          ls -la dist
+
+      # ---------------- Windows ----------------
+      - name: Build the app (NSIS .exe and .msi installers)
+        if: runner.os == 'Windows'
+        working-directory: app
+        run: |
+          # WiX (MSI) only accepts numeric pre-release versions; build just NSIS for e.g. 0.2.0-beta.1.
+          if [ "$PRERELEASE" = true ]; then npx tauri build --bundles nsis; else npx tauri build --bundles nsis,msi; fi
+      - name: Build the command-line tool
+        if: runner.os == 'Windows'
+        run: |
+          cargo build --release --locked -p lutmatrix-cli
+          target/release/lutmatrix.exe --version
+      - name: Collect the Windows files
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          mkdir -p dist cli
+          cp target/release/bundle/nsis/*-setup.exe "dist/LUT-Matrix_${VERSION}_Windows_x64-setup.exe"
+          if ls target/release/bundle/msi/*.msi >/dev/null 2>&1; then
+            cp target/release/bundle/msi/*.msi "dist/LUT-Matrix_${VERSION}_Windows_x64.msi"
+          fi
+          cp target/release/lutmatrix.exe README.md LICENSE NOTICE cli/
+          (cd cli && 7z a -tzip "../dist/lutmatrix-cli_${VERSION}_Windows_x64.zip" . >/dev/null)
+          ls -la dist
+      - name: Install and uninstall (NSIS, per-user, silent)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-Item "dist/LUT-Matrix_$env:VERSION`_Windows_x64-setup.exe"
+          $p = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "NSIS installer exit code $($p.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'LUT Matrix'
+          Get-ChildItem $dir | Format-Table Name, Length
+          $exe = Get-ChildItem $dir -Filter *.exe | Where-Object Name -notlike 'uninstall*' | Select-Object -First 1
+          if (-not $exe) { throw "no app .exe in $dir" }
+          $ver = (Get-Item $exe.FullName).VersionInfo.ProductVersion
+          Write-Host "installed $($exe.Name), version $ver"
+          $p = Start-Process (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstaller exit code $($p.ExitCode)" }
+      - name: Install and uninstall (MSI, silent)
+        if: runner.os == 'Windows' && needs.prepare.outputs.prerelease != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Get-Item "dist/LUT-Matrix_$env:VERSION`_Windows_x64.msi").FullName
+          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart /l*v msi-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; throw "msiexec /i exit code $($p.ExitCode)" }
+          $dir = Join-Path $env:ProgramFiles 'LUT Matrix'
+          Get-ChildItem $dir | Format-Table Name, Length
+          if (-not (Get-ChildItem $dir -Filter *.exe)) { throw "no app .exe in $dir" }
+          $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LUT-Matrix-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: [prepare, test, build]
+    if: needs.prepare.outputs.release == 'true' && needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          {
+            python3 tools/release_notes.py "$VERSION"
+            echo
+            echo "## Install"
+            echo
+            echo "- **macOS 11+** (Apple Silicon and Intel): \`LUT-Matrix_${VERSION}_macOS_universal.dmg\`"
+            echo "- **Windows 10/11** (x64): \`LUT-Matrix_${VERSION}_Windows_x64-setup.exe\` (no admin rights needed), or the \`.msi\` for a machine-wide install"
+            echo "- Command-line tool: \`lutmatrix-cli_*\`"
+            echo
+            echo "These builds are not signed by Apple or Microsoft. The first time you open them, see"
+            echo "[Install](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/README.md#install) in the README."
+            echo "\`SHA256SUMS.txt\` lists each file's checksum."
+          } > notes.md
+          cat notes.md
+      - name: Create or update the draft release
+        run: |
+          set -euo pipefail
+          pre=(); [ "$PRERELEASE" = true ] && pre=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --draft --title "LUT Matrix $VERSION" --notes-file notes.md --target "$GITHUB_SHA" "${pre[@]}"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" --draft --title "LUT Matrix $VERSION" --notes-file notes.md --target "$GITHUB_SHA" "${pre[@]}" dist/*
+          fi
+          echo "Draft release: $(gh release view "$TAG" --json url --jq .url)" | tee -a "$GITHUB_STEP_SUMMARY"
