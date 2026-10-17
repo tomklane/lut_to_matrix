@@ -6,12 +6,25 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-17
+
 ### Changed
+- The macOS app is ad-hoc signed (`signingIdentity: "-"`), so Apple Silicon Macs offer
+  *Open Anyway* instead of reporting the app as damaged.
+- The Windows NSIS installer installs per user (no admin rights).
 - License: GPL-3.0-or-later (was unlicensed), to include a port of OpenDRT (GPLv3).
 - D65 is now the default white mode (CLI `--white` defaults to `d65`).
 - Analysis JSON writes matrices as row-major nested arrays.
 
 ### Added
+- Release workflow (`.github/workflows/release.yml`, replaces `Bundle`): runs the full
+  test suite; builds the universal macOS .dmg, the Windows NSIS (per-user) and MSI
+  installers and the command-line tools for both; checks the .dmg contents (version,
+  architectures, signature) and installs/uninstalls both Windows installers; publishes
+  everything with `SHA256SUMS.txt` to a draft GitHub Release with notes from this file.
+  `tools/release_notes.py` extracts the notes and checks the changelog before a release.
+- README: Install (first launch of unsigned builds on macOS 15+ and Windows), building
+  each installer, and Releasing.
 - Desktop app (Tauri v2 + Svelte 5, `app/`): drag-and-drop or open a LUT; detected input
   and output spaces with confidence, reasons and overrides (ARRI EI, PQ peak); fit
   settings (white mode, anchor, bracket, metric, fit through a display transform,
@@ -20,7 +33,6 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Match with safety checks and Save to Library; preset library (rename, export, import,
   remove, build OpenDRT DCTL); About; remembered settings; light/dark mode;
   macOS-style overlay title bar. LUT path accepted on the command line.
-- `Bundle` GitHub workflow: unsigned macOS universal .dmg and Windows NSIS/MSI artifacts.
 - CI and `tools/check.sh` type-check and build the front end; Linux CI installs WebKitGTK.
 - Cargo workspace with `lutmatrix-core` (library) and `lutmatrix-cli` crates; version
   defined once in the root `Cargo.toml`.
@@ -91,3 +103,6 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   display encoding presets, every input gamut and transfer function, stickshift
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
+
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tomklane/lut_to_matrix/releases/tag/v0.1.0

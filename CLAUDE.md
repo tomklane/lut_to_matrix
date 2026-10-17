@@ -42,6 +42,9 @@ app/                       Tauri v2 desktop app (D30)
                            the Rust types; state.svelte.ts; platform.ts dialogs/clipboard/drops;
                            mock.ts dev-only backend fed by git-ignored dev-fixtures/)
   src-tauri/               `lutmatrix-app` crate: commands in src/lib.rs, tauri.conf.json
+.github/workflows/ci.yml       tests + clippy on macOS/Windows/Linux (also called by release)
+.github/workflows/release.yml  installers, CLI archives, checks, draft GitHub Release (D31)
+tools/release_notes.py         release notes for a version from CHANGELOG.md
 
 ```
 
@@ -83,4 +86,5 @@ See `CHANGELOG.md` "Unreleased" for what's done. Build stages:
 2. Sampling + fitting
 3. DCTL export
 4. GUI (Tauri v2 + Svelte)
-5. Installers + CI
+5. Installers + CI (done: 0.1.0). Releasing: README "Releasing"; keep CHANGELOG
+   sections in Keep a Changelog form, the release notes are taken from them.

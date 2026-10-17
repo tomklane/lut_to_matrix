@@ -7,8 +7,35 @@ Intermediate in and out).
 It also fits OpenDRT's look parameters to a LUT and keeps the results as presets on your
 computer.
 
-> Status: in development — stage 4 of 5 (desktop app). Installers come in stage 5; test
-> builds can be made with the *Bundle* GitHub workflow (unsigned).
+Version 0.1.0 · macOS 11+ (Apple Silicon and Intel) and Windows 10/11 (x64).
+
+## Install
+
+Download the latest release from the repository's
+[Releases](https://github.com/tomklane/lut_to_matrix/releases) page:
+
+| | File |
+|---|---|
+| macOS | `LUT-Matrix_<version>_macOS_universal.dmg`: open it and drag *LUT Matrix* to *Applications* |
+| Windows | `LUT-Matrix_<version>_Windows_x64-setup.exe`: installs for your user account, no admin rights needed |
+| Windows (machine-wide) | `LUT-Matrix_<version>_Windows_x64.msi`: installs to Program Files for all users (needs admin) |
+| Command line | `lutmatrix-cli_<version>_macOS_universal.tar.gz` / `…_Windows_x64.zip` |
+
+`SHA256SUMS.txt` on the release lists each file's checksum.
+
+The builds aren't signed with an Apple Developer ID or a Windows code-signing certificate,
+so each system asks once before the first launch:
+
+- **macOS 15 and later:** open the app; when macOS says it can't verify it, click *Done*.
+  Open *System Settings → Privacy & Security*, scroll down, click *Open Anyway* next to
+  "LUT Matrix" and confirm. **macOS 14 and earlier:** right-click the app → *Open* → *Open*.
+- **Windows:** if SmartScreen says "Windows protected your PC", click *More info* → *Run
+  anyway*. WebView2, which the app needs, is part of Windows 10 and 11; the installer
+  downloads it if it's missing.
+
+After that the app opens normally. Updates: install the new version over the old one;
+your settings and preset library are kept (they live in your user data folder, not in
+the app). To uninstall: drag the app to the Trash on macOS; *Settings → Apps* on Windows.
 
 ## The app
 
@@ -20,9 +47,6 @@ puts the 3×3 on the clipboard. *OpenDRT Match* fits OpenDRT to the LUT and save
 result to your local preset library; *Presets* builds an OpenDRT DCTL from it. Settings
 are remembered between sessions. Light and dark mode follow the system.
 
-The bundles are not signed. On macOS, the first time: right-click the app → *Open*
-(or `xattr -cr "/Applications/LUT Matrix.app"`). On Windows, SmartScreen → *More info* →
-*Run anyway*.
 
 ## Build
 
@@ -33,9 +57,43 @@ Requirements: Rust (stable, 1.80+), Node.js 20+. On Linux also the WebKitGTK pac
 cd app && npm ci && cd ..
 tools/check.sh                      # type-check + build the front end, clippy, all tests
 cd app && npx tauri dev             # run the app with live reload
-cd app && npx tauri build           # .app/.dmg on macOS, NSIS/MSI installers on Windows
+cd app && npx tauri build           # see below
 cargo build --release -p lutmatrix-cli   # the command-line tool only
 ```
+
+Installers, built on the platform they're for (paths are relative to the repo root):
+
+- **macOS:** `rustup target add aarch64-apple-darwin x86_64-apple-darwin`, then
+  `cd app && npx tauri build --target universal-apple-darwin --bundles app,dmg` →
+  `target/universal-apple-darwin/release/bundle/dmg/LUT Matrix_<version>_universal.dmg`.
+  Drop `--target …` for a build for your Mac's own architecture only. The app is ad-hoc
+  signed (`signingIdentity: "-"` in `app/src-tauri/tauri.conf.json`); Xcode's command line
+  tools (`xcode-select --install`) provide `codesign`.
+- **Windows:** `cd app && npx tauri build --bundles nsis,msi` →
+  `target\release\bundle\nsis\LUT Matrix_<version>_x64-setup.exe` and
+  `target\release\bundle\msi\LUT Matrix_<version>_x64_en-US.msi`. Needs the Visual Studio
+  C++ build tools; Tauri downloads NSIS and WiX itself.
+
+## Releasing
+
+The version lives only in the root `Cargo.toml` (`[workspace.package] version`).
+
+1. Set the new version in `Cargo.toml`, run `cargo check` (updates `Cargo.lock`), and in
+   `CHANGELOG.md` rename *Unreleased* to `## [<version>] - <date>` above a fresh, empty
+   *Unreleased*. Run `tools/check.sh`, commit and push to `main`.
+2. On GitHub: *Actions → Release → Run workflow*, tick *draft release*. (Or push a tag
+   `v<version>`; it must match `Cargo.toml`.) The workflow runs the full test suite on
+   macOS, Windows and Linux; builds the universal .dmg, the NSIS and MSI installers and
+   the command-line tools; opens the .dmg and checks the app's version, architectures
+   and signature; installs and uninstalls both Windows installers; and attaches
+   everything with `SHA256SUMS.txt` to a **draft** release, with notes taken from the
+   changelog.
+3. Download and try the files from the draft (*Releases* page). Then *Edit → Publish
+   release*, which creates the `v<version>` tag. Nothing is public before that.
+
+Without the tick, the workflow only builds and checks, leaving the files as workflow
+artifacts: use that for test builds. A version with a pre-release part (`0.2.0-beta.1`) is
+marked as a pre-release and gets no MSI (WiX accepts only numeric pre-release versions).
 
 `npm run dev` in `app/` runs the interface in a browser against a development mock of the
 backend (fixtures in `app/dev-fixtures/`, not committed).

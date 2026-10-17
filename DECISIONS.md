@@ -326,3 +326,27 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   git-ignored fixtures (`app/dev-fixtures/`), so the UI can be iterated and screenshotted
   without a native build; production bundles never include the mock.
 - Bundles are unsigned (no certificates, user decision); README explains first launch.
+
+## D31 — Installers and releases (stage 5)
+- No Apple Developer ID or Windows signing certificate (user decision, stage 0). The macOS
+  app is **ad-hoc signed** (`signingIdentity: "-"`): Apple Silicon requires a signature
+  on downloaded code, and a sealed ad-hoc bundle gets Gatekeeper's normal "can't verify"
+  path (*Open Anyway* in Privacy & Security on macOS 15+, right-click → Open before),
+  where an unsigned universal bundle can instead be reported as damaged. Adding a
+  Developer ID later only needs the Tauri signing/notarization secrets in the workflow.
+- macOS: one universal (arm64 + x86_64) .dmg, macOS 11+. Windows: NSIS `.exe` installing
+  **per user** (no admin, the usual choice for a single colorist's machine) plus an MSI
+  for machine-wide/managed installs. WebView2 uses Tauri's default download bootstrapper.
+- One `Release` workflow (replacing `Bundle`): it reuses `ci.yml` (`workflow_call`) for
+  the tests, builds and smoke-tests the bundles (mounts the .dmg and checks version,
+  architectures and signature; silently installs and uninstalls both Windows
+  installers), and attaches everything plus `SHA256SUMS.txt` to a **draft** release.
+  Drafts don't create the tag, so nothing is public or tagged until the user publishes.
+  A tag push must match `Cargo.toml`; the push caused by publishing a draft is ignored.
+- Release notes come from `CHANGELOG.md`; `tools/release_notes.py` fails the workflow if
+  the version has no section, so a release can't go out without its changelog.
+- The command-line tool ships as separate archives (universal on macOS); it isn't put on
+  the PATH by the installers.
+- No auto-updater: Tauri's updater needs its own signing key held as a repository secret
+  and an update endpoint; not worth it yet for one user. Settings and presets live in the
+  user data folder, so installing over an old version keeps them.
