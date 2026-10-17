@@ -172,3 +172,22 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   OpenCL C, C++ ≈ CUDA / Metal Shading Language); (3) a golden file catches unintended
   changes. Final confirmation in Resolve (CUDA, OpenCL, Metal) is by the user.
 - Header date is UTC.
+
+## D22 — Validation in Resolve (2026-10-16) and the double-counting problem
+- User test: synthetic ColorChecker in LogC3 EI800, Resolve on macOS (Metal). K1S1 and
+  Ulook4b LUTs vs our D65 DCTLs followed by a Resolve CST (with tone mapping) or by
+  OpenDRT v1.1.0 (Standard look, ACES-2.0 tonescale, Rec.1886/709, 100 nit, grey 10 nit).
+- Implementation verified: our tetrahedral LUT evaluation, our compiled build of the user's
+  OpenDRT DCTL, and our prediction of "DCTL → OpenDRT" all match the Resolve exports to
+  ≈0.15 ΔE2000 mean (16-bit export noise level). The DCTL runs as designed.
+- Finding: fitting M against plain colorimetry (scene XYZ → LUT display XYZ) captures
+  the LUT's whole rendering, including saturation its tone curve adds. A downstream DRT
+  then adds its own, so the result can be *further* from the LUT than the DRT alone
+  (K1S1 + OpenDRT, colour patches, exposure matched: 2.83 ΔE00 with matrix vs 2.13 without).
+- Fitting M **through** the downstream DRT — minimise ΔE(DRT(M·x), LUT(x)), exposure
+  matched per level, D65 neutral locked, hue ring at −1/0/+1 stops — fixes this on the
+  held-out chart: K1S1 1.76 (vs 2.13 without matrix), Ulook4b 4.61 (vs 5.44).
+- Direction (pending user confirmation): add a "reference display transform" input —
+  a LUT the user exports from Resolve (DWG/DI → display) for whatever CST/DRT follows the
+  DCTL — and fit through it. Ulook4b's split tone (warm highlights, cool shadows) and its
+  yellow handling remain out of reach of any 3×3 matrix.
