@@ -144,6 +144,23 @@ pub fn import_file(path: &Path, name: Option<&str>) -> Result<StoredPreset, Stor
     Err(bad("unrecognised contents".into()))
 }
 
+/// The app's per-user data folder (presets, preferences): see the module docs.
+pub fn data_dir() -> Result<PathBuf, StoreError> {
+    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    Ok(if let Some(d) = var("LUTMATRIX_DATA_DIR") {
+        d
+    } else if cfg!(target_os = "macos") {
+        var("HOME").ok_or(StoreError::NoDataDir)?.join("Library/Application Support/LUT Matrix")
+    } else if cfg!(windows) {
+        var("APPDATA").ok_or(StoreError::NoDataDir)?.join("LUT Matrix")
+    } else {
+        var("XDG_DATA_HOME")
+            .or_else(|| var("HOME").map(|h| h.join(".local/share")))
+            .ok_or(StoreError::NoDataDir)?
+            .join("lut-matrix")
+    })
+}
+
 /// The preset folder.
 pub struct PresetStore {
     dir: PathBuf,
@@ -152,20 +169,7 @@ pub struct PresetStore {
 impl PresetStore {
     /// The per-user folder (see the module docs).
     pub fn default_dir() -> Result<PathBuf, StoreError> {
-        let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-        let base = if let Some(d) = var("LUTMATRIX_DATA_DIR") {
-            d
-        } else if cfg!(target_os = "macos") {
-            var("HOME").ok_or(StoreError::NoDataDir)?.join("Library/Application Support/LUT Matrix")
-        } else if cfg!(windows) {
-            var("APPDATA").ok_or(StoreError::NoDataDir)?.join("LUT Matrix")
-        } else {
-            var("XDG_DATA_HOME")
-                .or_else(|| var("HOME").map(|h| h.join(".local/share")))
-                .ok_or(StoreError::NoDataDir)?
-                .join("lut-matrix")
-        };
-        Ok(base.join("opendrt-presets"))
+        Ok(data_dir()?.join("opendrt-presets"))
     }
 
     pub fn open_default() -> Result<Self, StoreError> {
