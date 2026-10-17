@@ -21,8 +21,13 @@ crates/lutmatrix-core      all colour math, LUT I/O, fitting, DCTL generation. N
     camera.rs              camera log curves + gamuts (one entry per space; add new ones here)
     display.rs             display gamuts + transfer functions (gamma, PQ)
     davinci.rs             DaVinci Wide Gamut + DaVinci Intermediate
-  src/lut/                 .cube / .3dl parsing, 1D/3D apply, tetrahedral/trilinear
+  src/lut/                 .cube / .3dl parsing, 1D/3D apply, tetrahedral/trilinear,
+                           `Transform` trait (LUT or exact analytic transform)
   src/detect.rs            guess input/output spaces from filename/TITLE/comments
+  src/difference.rs        CIELAB, ΔE2000, ICtCp, ΔE ITP
+  src/sample.rs            Settings, hue ring, Pipeline (scene XYZ → LUT → display XYZ), measure()
+  src/fit.rs               weighted / constrained least squares, Levenberg–Marquardt
+  src/analysis.rs          analyze(): white modes, fit, stats, diagnostics, swatches
 crates/lutmatrix-cli       `lutmatrix` binary (inspect, fit, export)
 tools/                     Python (colour-science) scripts that generate test fixtures
 crates/lutmatrix-core/tests/fixtures   committed reference values
@@ -49,6 +54,8 @@ app/                       Tauri v2 app (stage 4)
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p lutmatrix-cli -- inspect path/to/file.cube
+cargo run --release -p lutmatrix-cli -- fit path/to/file.cube [--white d65] [--json]
+tools/check.sh   # clippy + tests; run before every commit
 ```
 Regenerate fixtures (needs `pip install colour-science`):
 ```
