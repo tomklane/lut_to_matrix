@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use lutmatrix_core::analysis::{analyze, Analysis, Severity};
 use lutmatrix_core::detect::{detect, Confidence, Guess};
+use lutmatrix_core::difference::Metric;
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
 use lutmatrix_core::sample::{GrayAnchor, Settings, WhiteMode};
@@ -79,6 +80,9 @@ struct FitOpts {
     /// Least squares only (no perceptual refinement).
     #[arg(long)]
     ls_only: bool,
+    /// Error metric: auto (default), de2000 or itp.
+    #[arg(long, default_value = "auto")]
+    metric: String,
     /// Preserve mode: constrain the matrix to reproduce the LUT's white exactly.
     #[arg(long)]
     lock_neutral: bool,
@@ -132,6 +136,12 @@ fn build(lut: &Lut, o: &FitOpts) -> Result<(InputSpace, OutputSpace, Settings, O
         normalize_exposure: !o.no_normalize,
         refine: !o.ls_only,
         lock_neutral: o.lock_neutral,
+        metric: match o.metric.as_str() {
+            "auto" => Metric::Auto,
+            "de2000" => Metric::DeltaE2000,
+            "itp" => Metric::DeltaEItp,
+            m => return Err(format!("bad metric '{m}'")),
+        },
         ..Settings::default()
     };
     Ok((input, output, s, d.middle_gray_hint.map(|h| h.0)))

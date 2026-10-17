@@ -142,3 +142,9 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   are checked against a tolerance derived from that LUT's own measured interpolation
   error (≤ 3× grid ΔE + 0.05 mean / 0.1 max), because the perceptual fit follows the
   LUT as interpolated — which is what Resolve applies.
+
+## D19 — "Poor fit" thresholds
+- Warning when mean error > 3 ΔE2000 (SDR) or > 15 ΔE ITP (HDR). On ARRI's PQ LUTs the
+  same refined matrix scores mean 1.64 ΔE2000 but 7.6 ΔE ITP: ITP is ~5× more sensitive
+  around 13–26 cd/m² than ΔE2000 with a 203 cd/m² reference white, so the HDR threshold
+  is scaled accordingly. `--metric de2000` gives a like-for-like comparison.

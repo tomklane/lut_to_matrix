@@ -522,7 +522,8 @@ fn diagnose(d: &DiagInput) -> Vec<Diagnostic> {
             format!("Tone-curve contrast at middle gray is {:.2}; colour measured here may not represent other exposures.", d.contrast),
         ));
     }
-    let limit = if d.output.transfer.is_hdr() { 8.0 } else { 3.0 };
+    // ΔE ITP reads ~5× ΔE2000 around middle gray on real LUTs (DECISIONS.md D19).
+    let limit = if d.stats.metric == Metric::DeltaEItp { 15.0 } else { 3.0 };
     if d.stats.mean > limit {
         warn.push((
             "poor_fit",

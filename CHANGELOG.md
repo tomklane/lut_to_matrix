@@ -41,7 +41,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fit report: mean/RMS/p95/max error, neutral error and Δu′v′, worst hues, exposure
   placement, contrast at gray, LUT white, and warnings for exposure-dependent colour,
   neutral drift, poor fit, many skipped samples; sRGB swatches per sample.
-- `lutmatrix fit` CLI command with overrides for spaces, white mode, anchor, bracket.
+- `lutmatrix fit` CLI command with overrides for spaces, white mode, anchor, bracket,
+  metric and neutral lock.
 - Synthetic tests: matrix recovery across 10 camera/display pairs (exact and 65³),
   identity LUT → identity, P3-DCI white preserved/removed, tone-curve normalisation,
   anchor B, bracket, neutral lock, sample skipping.
