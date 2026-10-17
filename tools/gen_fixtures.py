@@ -112,6 +112,32 @@ def main():
     nits = [0.0, 0.1, 1.0, 26.0, 100.0, 203.0, 1000.0, 4000.0, 10000.0]
     out["pq"] = [[n, float(colour.models.eotf_inverse_ST2084(n))] for n in nits]
 
+    # Colour differences on pseudo-random pairs (fixed seed).
+    rng = np.random.default_rng(20261016)
+    d65_100 = colour.xy_to_XYZ(d65) * 100.0
+    de = []
+    for _ in range(40):
+        a = rng.uniform([1, 0.5, 0.5], [90, 95, 100])
+        b = a * rng.uniform(0.85, 1.15, 3)
+        la = colour.XYZ_to_Lab(a / 100.0, d65)
+        lb = colour.XYZ_to_Lab(b / 100.0, d65)
+        de.append({"xyz1": a.tolist(), "xyz2": b.tolist(), "white": d65_100.tolist(),
+                   "lab1": la.tolist(), "de2000": float(colour.delta_E(la, lb, method="CIE 2000"))})
+    out["delta_e_2000"] = de
+
+    rec2020 = colour.RGB_COLOURSPACES["ITU-R BT.2020"]
+    itp = []
+    for _ in range(40):
+        a = rng.uniform(0.5, 800.0, 3)
+        b = a * rng.uniform(0.9, 1.1, 3)
+        xa = rec2020.matrix_RGB_to_XYZ @ a
+        xb = rec2020.matrix_RGB_to_XYZ @ b
+        ia = colour.RGB_to_ICtCp(a)
+        ib = colour.RGB_to_ICtCp(b)
+        itp.append({"xyz1": xa.tolist(), "xyz2": xb.tolist(), "ictcp1": ia.tolist(),
+                    "de_itp": float(colour.difference.delta_E_ITP(ia, ib))})
+    out["delta_e_itp"] = itp
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, indent=1))
     print(f"wrote {OUT}")

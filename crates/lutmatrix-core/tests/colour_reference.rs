@@ -252,3 +252,32 @@ fn white_points_map_to_neutral() {
         assert!((xy.x - p.white.x).abs() < 1e-14 && (xy.y - p.white.y).abs() < 1e-14);
     }
 }
+
+#[test]
+fn delta_e_2000_matches_colour_science() {
+    use lutmatrix_core::difference::{delta_e_2000, xyz_to_lab};
+    let f = fixtures();
+    for c in f["delta_e_2000"].as_array().unwrap() {
+        let v = |k: &str| Vec3::from(<[f64; 3]>::try_from(serde_json::from_value::<Vec<f64>>(c[k].clone()).unwrap()).unwrap());
+        let w = v("white");
+        let la = xyz_to_lab(&v("xyz1"), &w);
+        assert!((la - v("lab1")).abs().max() < 1e-9, "Lab");
+        let d = delta_e_2000(&la, &xyz_to_lab(&v("xyz2"), &w));
+        let want = c["de2000"].as_f64().unwrap();
+        assert!((d - want).abs() < 1e-9, "ΔE2000 {d} vs {want}");
+    }
+}
+
+#[test]
+fn delta_e_itp_matches_colour_science() {
+    use lutmatrix_core::difference::{delta_e_itp, xyz_nits_to_ictcp};
+    let f = fixtures();
+    for c in f["delta_e_itp"].as_array().unwrap() {
+        let v = |k: &str| Vec3::from(<[f64; 3]>::try_from(serde_json::from_value::<Vec<f64>>(c[k].clone()).unwrap()).unwrap());
+        let ia = xyz_nits_to_ictcp(&v("xyz1"));
+        assert!((ia - v("ictcp1")).abs().max() < 1e-9, "ICtCp {ia:?}");
+        let d = delta_e_itp(&ia, &xyz_nits_to_ictcp(&v("xyz2")));
+        let want = c["de_itp"].as_f64().unwrap();
+        assert!((d - want).abs() < 1e-7 * want.max(1.0), "ΔE ITP {d} vs {want}");
+    }
+}

@@ -79,6 +79,9 @@ pub static CAMERA_SPACES: &[CameraSpace] = &[
             kw_unless("logc", 2.0, &["logc4", "logc2video"]),
             kw_unless("alexa", 1.0, &["alexa35"]),
             kw("k1s1", 1.0),
+            // ALEXA LF / Mini LF record LogC3 / AWG3.
+            kw("alexalf", 3.0),
+            kw("minilf", 3.0),
         ],
     },
     CameraSpace {

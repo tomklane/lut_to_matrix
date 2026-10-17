@@ -28,4 +28,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lands vs display middle gray); PQ inference from output range; diffuse-white hint
   ("DW100") for display middle gray.
 - `lutmatrix inspect` CLI command (text or `--json`).
+- CIELAB, CIEDE2000, ICtCp (BT.2100 PQ) and ΔE ITP (BT.2124), checked against
+  colour-science and Sharma et al. (2005) test data.
+- ALEXA LF / Mini LF detection keywords (LogC3 / AWG3).
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
