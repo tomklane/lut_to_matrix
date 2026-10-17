@@ -31,4 +31,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CIELAB, CIEDE2000, ICtCp (BT.2100 PQ) and ΔE ITP (BT.2124), checked against
   colour-science and Sharma et al. (2005) test data.
 - ALEXA LF / Mini LF detection keywords (LogC3 / AWG3).
+- Sampling: CIELAB hue ring at middle-gray luminance (36 hues × 4 saturations by
+  default) bounded by camera ∩ display gamut, optional ±N-stop bracket, anchor A
+  (scene 0.18) or B (exposure where the LUT hits display middle gray), skipping of
+  out-of-gamut / out-of-domain / clipped samples, exposure normalisation.
+- Fitting: weighted least squares, neutral-constrained least squares, and
+  Levenberg–Marquardt refinement on ΔE2000 (SDR) or ΔE ITP (HDR); preserve-LUT-white
+  and D65 white modes (Bradford/CAT02 + exact neutral constraint); optional neutral lock.
+- Fit report: mean/RMS/p95/max error, neutral error and Δu′v′, worst hues, exposure
+  placement, contrast at gray, LUT white, and warnings for exposure-dependent colour,
+  neutral drift, poor fit, many skipped samples; sRGB swatches per sample.
+- `lutmatrix fit` CLI command with overrides for spaces, white mode, anchor, bracket.
+- Synthetic tests: matrix recovery across 10 camera/display pairs (exact and 65³),
+  identity LUT → identity, P3-DCI white preserved/removed, tone-curve normalisation,
+  anchor B, bracket, neutral lock, sample skipping.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
