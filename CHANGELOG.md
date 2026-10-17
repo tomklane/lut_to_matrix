@@ -62,20 +62,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so that the DRT that follows the DCTL (a CST, OpenDRT, … exported from Resolve as a
   LUT) reproduces the source LUT, exposure matched, with a report of the gain over the
   DRT alone; the DCTL header names the reference.
-- `tools/opendrt_presets/`: tooling and fitted parameters for OpenDRT look presets that
-  match specific LUTs (ARRI K1S1, Ulook4b, DLook10, Goodrich, ARRI LogC4 709,
-  5207 pull 2 / 2393); ACES2065-1 linear LUT input; parameter freezing and regularisation.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
 - OpenDRT LUT matching in Rust (`lutmatrix_core::opendrt_match`, CLI `lutmatrix opendrt
   fit`): fits every OpenDRT look parameter plus grey to a LUT, with safety checks (range,
   exposure-sweep luminance reversals with automatic brilliance freeze, smoothness vs stock
-  looks). Replaces the Python/C++ tooling for fitting.
-- `presets/opendrt/`: OpenDRT with eight LUT Match presets refitted by the Rust fitter
-  (adds 5201 and 5219 pull 2 / 2393), plus the fit reports.
+  looks).
+- Local OpenDRT preset library (`lutmatrix_core::preset_store`; CLI `lutmatrix opendrt
+  presets list|show|remove|import|export|path`): fits are saved per user on this machine;
+  no LUT Match presets ship with the app or live in the repo.
 - CI requires a C++ compiler on macOS and Linux so the OpenDRT parity test cannot skip.
-- `lutmatrix opendrt build`: writes the bundled OpenDRT DCTL with LUT Match look presets
-  (per-preset grey only with Tonescale Preset = USE LOOK PRESET); reads new and old fit
-  files. The written DCTL is compiled and checked against the port in tests.
+- `lutmatrix opendrt build`: writes the bundled OpenDRT DCTL with presets from the local
+  library as LUT Match look presets (per-preset grey only with Tonescale Preset = USE LOOK
+  PRESET). The written DCTL is compiled and checked against the port in tests.
 - ACES2065-1 (linear AP0) input space (`aces2065_ap0`), with detection; "709G24"-style
   names detected as gamma 2.4 / 2.2.
 - `lutmatrix-opendrt` crate: a Rust port of OpenDRT v1.1.0 (Jed Smith, GPLv3) as used in

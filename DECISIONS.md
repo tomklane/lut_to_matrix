@@ -218,8 +218,8 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 ## D24 — OpenDRT "LUT Match" presets (user request 2026-10-16)
 - Separate from the matrix app: OpenDRT's full look parameter set was fitted directly to
   each LUT (tone and colour, across exposure), via a stickshift build of the user's
-  OpenDRT v1.1.0 DCTL compiled as C++. Tooling in `tools/opendrt_presets/`; OpenDRT
-  itself (GPLv3) is not in this repo.
+  OpenDRT v1.1.0 DCTL compiled as C++. (That Python tooling has since been replaced by
+  the Rust fitter, D28, and removed with its fit results, D29.)
 - Held-out ColorChecker (user's Resolve exports), mean ΔE00 vs the LUT, no exposure
   matching: K1S1 2.40 (Standard/ACES-2.0) → 0.65; Ulook4b 10.62 → 2.92. Far closer than a
   3×3 matrix can get, because the tonescale and hue/purity behaviour are fitted too.
@@ -294,3 +294,14 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Results vs the Python tool (training mean ΔE2000): K1S1 0.86 (0.94), Ulook4b 2.30
   (2.44), 5207 2.37 with brilliance auto-frozen (2.38 frozen by hand), ARRI LogC4 709
   1.06 (1.16), Goodrich 2.96 (3.00); ~4 s each instead of 20–120 s.
+
+## D29 — Presets are local only (user decision 2026-10-17)
+- No LUT Match presets are baked into the app or committed to the repo: they are derived
+  from the user's LUTs. The fitted DCTL/JSON files and the old Python tool's fits were
+  removed from the repo (they remain in git history).
+- The app keeps presets in a per-user library (`preset_store`): one JSON file per preset
+  (name, source LUT, look parameters, grey, creation time, full fit report) in the OS app
+  data folder; `LUTMATRIX_DATA_DIR` / `--store` override it. Menu order = creation order.
+  `opendrt fit` saves there by default; `opendrt build` reads only from there.
+- The stock OpenDRT looks/tonescales remain: they are part of OpenDRT itself (the bundled
+  DCTL), used as fit starting points and needed to reproduce Resolve's output.

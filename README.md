@@ -57,27 +57,30 @@ own output).
 ### Match OpenDRT to a LUT
 
 ```sh
-lutmatrix opendrt fit "My LUT.cube"     # writes My LUT_opendrt_match.json next to the LUT
+lutmatrix opendrt fit --name "LUT Match K1S1" "K1S1.cube"   # fit and save to your preset library
 lutmatrix opendrt fit --input arri_log_c3_awg3 --freeze brl "x.cube"
+lutmatrix opendrt presets list                               # also: show, remove, import, export, path
+lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl            # OpenDRT + every preset in your library
+lutmatrix opendrt build --preset "LUT Match K1S1" -o K1S1.dctl
 ```
 
-Fits every OpenDRT v1.1.0 look parameter and the Display Grey Luminance so that OpenDRT
-(DaVinci Wide Gamut / Intermediate in, the LUT's display out) reproduces the LUT. The
-report compares the stock Standard look, the best unmodified preset and the fit, and runs
-safety checks (output range, luminance never falling as exposure rises, smoothness).
+`fit` adjusts every OpenDRT v1.1.0 look parameter and the Display Grey Luminance so that
+OpenDRT (DaVinci Wide Gamut / Intermediate in, the LUT's display out) reproduces the LUT.
+The report compares the stock Standard look, the best unmodified preset and the fit, and
+runs safety checks (output range, luminance never falling as exposure rises, smoothness).
 
-Then write OpenDRT with your fits as extra Look Presets:
+**Presets are yours and stay on your machine.** The app ships no LUT Match presets; each
+fit is saved as a JSON file in your preset library (`lutmatrix opendrt presets path`):
+`~/Library/Application Support/LUT Matrix/opendrt-presets/` on macOS,
+`%APPDATA%\LUT Matrix\opendrt-presets\` on Windows (`--store DIR` or the
+`LUTMATRIX_DATA_DIR` environment variable to use another folder). `presets import` /
+`export` move them between machines.
 
-```sh
-lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl \
-    --name "LUT Match K1S1" "K1S1_opendrt_match.json" \
-    --name "LUT Match Ulook4b" "Ulook4b_opendrt_match.json"
-```
-
-The DCTL is the bundled OpenDRT v1.1.0.1 with the stock presets unchanged. Each LUT Match
-preset carries its own middle-gray level, used only with *Tonescale Preset = USE LOOK
-PRESET*; with any stock tonescale every look has the exposure of the *Display Grey
-Luminance* slider. Install it like any DCTL; use DaVinci Wide Gamut / Intermediate in.
+`build` writes the bundled OpenDRT v1.1.0.1 with the stock presets unchanged and your
+presets appended to the Look Preset menu. Each LUT Match preset carries its own
+middle-gray level, used only with *Tonescale Preset = USE LOOK PRESET*; with any stock
+tonescale every look has the exposure of the *Display Grey Luminance* slider. Install it
+like any DCTL; use DaVinci Wide Gamut / Intermediate in.
 
 ### Export a DCTL
 

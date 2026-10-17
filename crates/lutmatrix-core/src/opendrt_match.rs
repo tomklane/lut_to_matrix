@@ -37,7 +37,7 @@ pub enum MatchError {
     TooFewSamples(usize),
 }
 
-/// Knobs of the fit. Defaults reproduce the method of `tools/opendrt_presets`.
+/// Knobs of the fit. Defaults reproduce the earlier Python tool's method (D24).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MatchSettings {

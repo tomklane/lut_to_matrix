@@ -11,8 +11,8 @@ use lutmatrix_core::difference::Metric;
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
 use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
-use lutmatrix_opendrt::writer::{lut_match_dctl, sanitize_name, LutMatchPreset};
-use lutmatrix_opendrt::Config as OdrtConfig;
+use lutmatrix_core::preset_store::{import_file, PresetStore, StoredPreset};
+use lutmatrix_opendrt::writer::lut_match_dctl;
 use lutmatrix_core::sample::{GrayAnchor, Settings, WhiteMode};
 use lutmatrix_core::spaces::{CameraSpaceId, DisplayGamut, DisplayTransfer, InputSpace, OutputSpace};
 
@@ -43,9 +43,9 @@ enum Cmd {
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
     },
-    /// Match OpenDRT to LUTs and build OpenDRT DCTLs with "LUT Match" look presets.
-    #[command(subcommand)]
-    Opendrt(OdrtCmd),
+    /// Match OpenDRT to LUTs, keep the results in your local preset library, and build
+    /// OpenDRT DCTLs with them as "LUT Match" look presets.
+    Opendrt(OdrtArgs),
     /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
     Fit {
         file: PathBuf,
@@ -101,13 +101,31 @@ impl SpaceOpts {
     }
 }
 
+#[derive(Args)]
+struct OdrtArgs {
+    /// Preset library folder (default: your per-user app data folder; see `presets path`).
+    #[arg(long, global = true, value_name = "DIR")]
+    store: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: OdrtCmd,
+}
+
 #[derive(Subcommand)]
 enum OdrtCmd {
-    /// Fit OpenDRT's look parameters to a LUT; writes <LUT>_opendrt_match.json.
+    /// Fit OpenDRT's look parameters to a LUT and save the result in your preset library.
     Fit {
         file: PathBuf,
         #[command(flatten)]
         spaces: SpaceOpts,
+        /// Preset name (default: "LUT Match <LUT name>").
+        #[arg(long)]
+        name: Option<String>,
+        /// Overwrite a preset of the same name.
+        #[arg(long)]
+        replace: bool,
+        /// Do not save to the library (report only).
+        #[arg(long)]
+        no_save: bool,
         /// Keep these parameters at the start preset (name prefixes, comma separated;
         /// "brl" = brilliance and post brilliance, "grey" = grey level).
         #[arg(long, value_delimiter = ',')]
@@ -124,20 +142,22 @@ enum OdrtCmd {
         /// Do not refit with brilliance frozen when luminance falls with exposure.
         #[arg(long)]
         no_auto_freeze: bool,
-        /// Output file (default: next to the LUT).
+        /// Also write the full fit report to this file.
         #[arg(long, short)]
         out: Option<PathBuf>,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Write OpenDRT (the bundled v1.1.0.1 DCTL) with one LUT Match look preset per fit.
+    /// Manage your local preset library.
+    #[command(subcommand)]
+    Presets(PresetCmd),
+    /// Write OpenDRT (the bundled v1.1.0.1 DCTL) with presets from your library added as
+    /// Look Presets.
     Build {
-        /// Fit results from `lutmatrix opendrt fit` (older tools/opendrt_presets fits work too).
-        fits: Vec<PathBuf>,
-        /// Menu name for each fit, in order (default: "LUT Match <LUT name>").
-        #[arg(long = "name")]
-        names: Vec<String>,
+        /// Presets to include, in menu order (default: all, oldest first).
+        #[arg(long = "preset", value_name = "NAME")]
+        presets: Vec<String>,
         /// Output DCTL (default: OpenDRT_v1.1.0.1_LUTmatch.dctl in the current folder).
         #[arg(long, short)]
         out: Option<PathBuf>,
@@ -147,31 +167,33 @@ enum OdrtCmd {
     },
 }
 
-/// A LUT Match preset from a fit file: this CLI's JSON, or the Python tool's.
-fn load_preset(path: &std::path::Path, name: Option<&String>) -> Result<LutMatchPreset, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (look, grey, source) = if let Some(cfg) = v.get("config") {
-        let cfg: OdrtConfig = serde_json::from_value(cfg.clone()).map_err(|e| format!("{}: {e}", path.display()))?;
-        (cfg.look, cfg.grey_nits * cfg.grey_scale, v["lut_name"].as_str().unwrap_or("?").to_string())
-    } else if let Some(params) = v.get("params").and_then(|p| p.as_object()) {
-        let mut look = OdrtConfig::default().look;
-        let mut grey = None;
-        for (k, x) in params {
-            let x = x.as_f64().ok_or_else(|| format!("{}: {k} is not a number", path.display()))? as f32;
-            if k == "tn_Lg" {
-                grey = Some(x);
-            } else if !look.set(k.trim_start_matches('_'), x) {
-                return Err(format!("{}: unknown OpenDRT parameter {k}", path.display()));
-            }
-        }
-        (look, grey.ok_or_else(|| format!("{}: no tn_Lg", path.display()))?, v["lut"].as_str().unwrap_or("?").to_string())
-    } else {
-        return Err(format!("{}: not an OpenDRT fit file", path.display()));
-    };
-    let stem = std::path::Path::new(&source).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let name = name.cloned().unwrap_or_else(|| format!("LUT Match {stem}"));
-    Ok(LutMatchPreset { name, look, grey_nits: grey, source })
+#[derive(Subcommand)]
+enum PresetCmd {
+    /// List the presets in your library.
+    List,
+    /// Print where the library lives.
+    Path,
+    /// Show one preset's fit summary.
+    Show { name: String },
+    /// Delete a preset.
+    Remove { name: String },
+    /// Add presets from files (a saved preset, an `opendrt fit --out` report, or an
+    /// older Python-tool fit).
+    Import {
+        files: Vec<PathBuf>,
+        /// Name for each file, in order (default: the name in the file or "LUT Match <LUT>").
+        #[arg(long = "name")]
+        names: Vec<String>,
+        /// Overwrite presets of the same name.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Copy a preset out of the library to a file.
+    Export {
+        name: String,
+        #[arg(long, short)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -396,11 +418,22 @@ fn print_match(m: &OpenDrtMatch) {
     println!("  {:<15} {:.0} s", "Time", m.seconds);
 }
 
-fn run_opendrt(cmd: OdrtCmd) -> Result<(), String> {
-    match cmd {
-        OdrtCmd::Fit { file, spaces, freeze, reg, iterations, starts, no_auto_freeze, out, json } => {
+fn run_opendrt(args: OdrtArgs) -> Result<(), String> {
+    let store = match args.store {
+        Some(d) => PresetStore::at(d),
+        None => PresetStore::open_default().map_err(|e| e.to_string())?,
+    };
+    match args.cmd {
+        OdrtCmd::Fit { file, spaces, name, replace, no_save, freeze, reg, iterations, starts, no_auto_freeze, out, json } => {
             let lut = Lut::load(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let (input, output, _) = spaces.resolve(&lut)?;
+            let preset_name = name.clone().unwrap_or_else(|| {
+                let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                format!("LUT Match {stem}")
+            });
+            if !no_save && !replace && store.get(&preset_name).is_ok() {
+                return Err(format!("a preset called '{preset_name}' is already in your library; use --replace or --name"));
+            }
             let settings = MatchSettings {
                 freeze,
                 regularization: reg,
@@ -410,41 +443,96 @@ fn run_opendrt(cmd: OdrtCmd) -> Result<(), String> {
                 ..MatchSettings::default()
             };
             let m = match_opendrt(&lut, lut.filename.clone(), input, output, &settings).map_err(|e| e.to_string())?;
-            let body = serde_json::to_string_pretty(&m).unwrap() + "\n";
             if json {
-                print!("{body}");
+                println!("{}", serde_json::to_string_pretty(&m).unwrap());
             } else {
                 print_match(&m);
             }
-            let path = out.unwrap_or_else(|| {
-                let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                file.with_file_name(format!("{stem}_opendrt_match.json"))
-            });
-            std::fs::write(&path, body).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-            if !json {
-                println!("wrote {}", path.display());
+            if let Some(path) = out {
+                let body = serde_json::to_string_pretty(&m).unwrap() + "\n";
+                std::fs::write(&path, body).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+                eprintln!("wrote {}", path.display());
+            }
+            if !no_save {
+                let p = StoredPreset::from_match(&m, Some(&preset_name)).map_err(|e| e.to_string())?;
+                let path = store.save(&p, replace).map_err(|e| e.to_string())?;
+                eprintln!("saved preset '{}' to {}", p.name, path.display());
             }
             Ok(())
         }
-        OdrtCmd::Build { fits, names, out, note } => {
-            if fits.is_empty() {
-                return Err("give at least one fit file".into());
+        OdrtCmd::Presets(cmd) => run_presets(&store, cmd),
+        OdrtCmd::Build { presets, out, note } => {
+            let (all, bad) = store.list().map_err(|e| e.to_string())?;
+            for e in bad {
+                eprintln!("skipped: {e}");
             }
-            if names.len() > fits.len() {
-                return Err("more --name values than fit files".into());
+            let chosen: Vec<StoredPreset> = if presets.is_empty() {
+                all
+            } else {
+                presets.iter().map(|n| store.get(n).map_err(|e| e.to_string())).collect::<Result<_, _>>()?
+            };
+            if chosen.is_empty() {
+                return Err(format!("your preset library ({}) is empty; run `lutmatrix opendrt fit` first", store.dir().display()));
             }
-            let presets =
-                fits.iter().enumerate().map(|(i, f)| load_preset(f, names.get(i))).collect::<Result<Vec<_>, _>>()?;
-            let dctl = lut_match_dctl(&presets, &note).map_err(|e| e.to_string())?;
+            let writer: Vec<_> = chosen.iter().map(|p| p.to_writer()).collect();
+            let dctl = lut_match_dctl(&writer, &note).map_err(|e| e.to_string())?;
             let path = out.unwrap_or_else(|| PathBuf::from("OpenDRT_v1.1.0.1_LUTmatch.dctl"));
             std::fs::write(&path, dctl).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-            println!("wrote {} with {} LUT Match preset(s):", path.display(), presets.len());
-            for p in &presets {
-                println!("  {:<28} grey {:.2} nits  ({})", sanitize_name(&p.name), p.grey_nits, p.source);
+            println!("wrote {} with {} LUT Match preset(s):", path.display(), chosen.len());
+            for p in &chosen {
+                println!("  {:<28} grey {:>5.2} nits  ({})", p.name, p.grey_nits, p.source_lut);
             }
             Ok(())
         }
     }
+}
+
+fn run_presets(store: &PresetStore, cmd: PresetCmd) -> Result<(), String> {
+    match cmd {
+        PresetCmd::Path => println!("{}", store.dir().display()),
+        PresetCmd::List => {
+            let (all, bad) = store.list().map_err(|e| e.to_string())?;
+            if all.is_empty() {
+                println!("no presets in {}", store.dir().display());
+            }
+            for p in &all {
+                let err = p.report.as_ref().map(|r| format!("  {} {:.2}", r.metric.label(), r.fitted.mean)).unwrap_or_default();
+                println!("{:<28} {}  grey {:>5.2} nits{err}  ({})", p.name, p.created_date(), p.grey_nits, p.source_lut);
+            }
+            for e in bad {
+                eprintln!("skipped: {e}");
+            }
+        }
+        PresetCmd::Show { name } => {
+            let p = store.get(&name).map_err(|e| e.to_string())?;
+            println!("{}  (saved {}, grey {:.2} nits)", p.name, p.created_date(), p.grey_nits);
+            match &p.report {
+                Some(m) => print_match(m),
+                None => println!("  imported from {} (no fit report)", p.source_lut),
+            }
+        }
+        PresetCmd::Remove { name } => {
+            store.remove(&name).map_err(|e| e.to_string())?;
+            println!("removed '{name}'");
+        }
+        PresetCmd::Import { files, names, replace } => {
+            if names.len() > files.len() {
+                return Err("more --name values than files".into());
+            }
+            for (i, f) in files.iter().enumerate() {
+                let p = import_file(f, names.get(i).map(|s| s.as_str())).map_err(|e| e.to_string())?;
+                let path = store.save(&p, replace).map_err(|e| e.to_string())?;
+                println!("imported '{}' → {}", p.name, path.display());
+            }
+        }
+        PresetCmd::Export { name, out } => {
+            let p = store.get(&name).map_err(|e| e.to_string())?;
+            let body = serde_json::to_string_pretty(&p).unwrap() + "\n";
+            std::fs::write(&out, body).map_err(|e| format!("could not write {}: {e}", out.display()))?;
+            println!("wrote {}", out.display());
+        }
+    }
+    Ok(())
 }
 
 fn conf(c: Confidence) -> &'static str {
@@ -571,7 +659,7 @@ fn main() -> ExitCode {
             println!("{}", meta.fit_error);
             ExitCode::SUCCESS
         }
-        Cmd::Opendrt(cmd) => match run_opendrt(cmd) {
+        Cmd::Opendrt(args) => match run_opendrt(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("{e}");

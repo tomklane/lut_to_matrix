@@ -12,6 +12,7 @@ pub mod fit;
 pub mod lut;
 pub mod math;
 pub mod opendrt_match;
+pub mod preset_store;
 pub mod sample;
 pub mod spaces;
 
