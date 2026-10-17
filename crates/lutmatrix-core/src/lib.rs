@@ -11,6 +11,7 @@ pub mod difference;
 pub mod fit;
 pub mod lut;
 pub mod math;
+pub mod opendrt_match;
 pub mod sample;
 pub mod spaces;
 

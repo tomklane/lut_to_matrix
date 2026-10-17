@@ -272,3 +272,25 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - **Not ported:** the tonescale overlay (`crv_enable`), which draws a curve on screen.
 - `Config::grey_scale` models the `lg_scale` that the LUT Match presets add (D24); it is 1
   for stock OpenDRT.
+
+## D28 — OpenDRT LUT matching in the app
+- Same method as the Python tool (D24), now in `lutmatrix_core::opendrt_match` on the Rust
+  port: gray ramp −7…+6 stops (weight 4), hue rings 24 × {0.3, 0.6, 0.9} inside camera ∩
+  display at −3…+2 stops, rings 12 × {0.6, 0.9} inside the camera gamut at −1…+1 stops;
+  samples outside the LUT's input domain are dropped (they would only measure clamping).
+- Rings for an ACES AP0 input are bounded by ARRI Wide Gamut 3 instead (AP0 is mostly
+  imaginary colours); configurable (`ring_gamut`).
+- Search: 9 looks × 14 tonescales × creative white D65/D75/D60, grey matched. Refine the 3
+  best distinct (look, tonescale) starts with bounded Levenberg–Marquardt over all 53
+  float look parameters plus grey (3–25 nits), in slider-range units, forward-difference
+  Jacobian in parallel. Disabled modules start enabled at zero strength.
+- Safety checks: (1) finite, in-range output on a 17³ cube; (2) exposure sweep −8…+8
+  stops of gray and 36 hues (display- and camera-limited chroma) — luminance must never
+  fall as exposure rises (0.2 % tolerance); a reversal triggers an automatic refit with
+  brilliance frozen ("brl", also covers post brilliance), as was needed by hand for 5207;
+  (3) smoothness: largest second difference over a 33³ DI cube, real colours ≤ +6 stops,
+  unclipped channels, compared with the stock looks; > 1.5× is reported, not blocked.
+  All stock looks pass (1) and (2) (tested).
+- Results vs the Python tool (training mean ΔE2000): K1S1 0.86 (0.94), Ulook4b 2.30
+  (2.44), 5207 2.37 with brilliance auto-frozen (2.38 frozen by hand), ARRI LogC4 709
+  1.06 (1.16), Goodrich 2.96 (3.00); ~4 s each instead of 20–120 s.

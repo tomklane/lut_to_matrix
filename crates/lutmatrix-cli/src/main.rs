@@ -6,10 +6,11 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use lutmatrix_core::analysis::{analyze_with, Analysis, Reference, Severity};
 use lutmatrix_core::dctl;
-use lutmatrix_core::detect::{detect, Confidence, Guess};
+use lutmatrix_core::detect::{detect, Confidence, Detection, Guess};
 use lutmatrix_core::difference::Metric;
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
+use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
 use lutmatrix_core::sample::{GrayAnchor, Settings, WhiteMode};
 use lutmatrix_core::spaces::{CameraSpaceId, DisplayGamut, DisplayTransfer, InputSpace, OutputSpace};
 
@@ -40,6 +41,9 @@ enum Cmd {
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
     },
+    /// Match OpenDRT to LUTs and build OpenDRT DCTLs with "LUT Match" look presets.
+    #[command(subcommand)]
+    Opendrt(OdrtCmd),
     /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
     Fit {
         file: PathBuf,
@@ -51,9 +55,10 @@ enum Cmd {
     },
 }
 
+/// The LUT's input and output spaces (detected unless overridden).
 #[derive(Args)]
-struct FitOpts {
-    /// Override input space id, e.g. arri_log_c3_awg3, arri_log_c4_awg4, sony_s_log3_s_gamut3_cine.
+struct SpaceOpts {
+    /// Override input space id, e.g. arri_log_c3_awg3, arri_log_c4_awg4, aces2065_ap0.
     #[arg(long)]
     input: Option<String>,
     /// ARRI LogC3 exposure index.
@@ -68,6 +73,68 @@ struct FitOpts {
     /// PQ peak luminance (cd/m²).
     #[arg(long)]
     peak: Option<f64>,
+}
+
+impl SpaceOpts {
+    fn resolve(&self, lut: &Lut) -> Result<(InputSpace, OutputSpace, Detection), String> {
+        let d = detect(lut);
+        let mut input = d.input.value;
+        if let Some(id) = &self.input {
+            input = InputSpace::new(parse_id::<CameraSpaceId>(id, "input space")?);
+        }
+        if let Some(ei) = self.ei {
+            input.arri_ei = ei;
+        }
+        let mut output = d.output_space();
+        if let Some(g) = &self.gamut {
+            output.gamut = parse_id::<DisplayGamut>(g, "gamut")?;
+        }
+        if let Some(t) = &self.transfer {
+            output.transfer = parse_transfer(t, None)?;
+        }
+        if let (Some(p), DisplayTransfer::Pq { peak_nits }) = (self.peak, &mut output.transfer) {
+            *peak_nits = p;
+        }
+        Ok((input, output, d))
+    }
+}
+
+#[derive(Subcommand)]
+enum OdrtCmd {
+    /// Fit OpenDRT's look parameters to a LUT; writes <LUT>_opendrt_match.json.
+    Fit {
+        file: PathBuf,
+        #[command(flatten)]
+        spaces: SpaceOpts,
+        /// Keep these parameters at the start preset (name prefixes, comma separated;
+        /// "brl" = brilliance and post brilliance, "grey" = grey level).
+        #[arg(long, value_delimiter = ',')]
+        freeze: Vec<String>,
+        /// Pull towards the start preset (0 = off).
+        #[arg(long, default_value_t = 0.0)]
+        reg: f64,
+        /// Optimiser iterations per start.
+        #[arg(long, default_value_t = 150)]
+        iterations: usize,
+        /// Number of preset starts to refine.
+        #[arg(long, default_value_t = 3)]
+        starts: usize,
+        /// Do not refit with brilliance frozen when luminance falls with exposure.
+        #[arg(long)]
+        no_auto_freeze: bool,
+        /// Output file (default: next to the LUT).
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        /// Print the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args)]
+struct FitOpts {
+    #[command(flatten)]
+    spaces: SpaceOpts,
     /// White mode: d65 (default) or preserve.
     #[arg(long, default_value = "d65")]
     white: String,
@@ -130,7 +197,7 @@ fn load_reference(o: &FitOpts, lut_output: OutputSpace) -> Result<Option<(Lut, I
         out.gamut = parse_id::<DisplayGamut>(g, "gamut")?;
     }
     if let Some(t) = &o.through_transfer {
-        out.transfer = parse_transfer(t, o.peak)?;
+        out.transfer = parse_transfer(t, o.spaces.peak)?;
     }
     let name = lut.filename.clone().unwrap_or_else(|| path.display().to_string());
     Ok(Some((lut, input, out, name)))
@@ -148,24 +215,7 @@ fn parse_id<T: serde::de::DeserializeOwned>(s: &str, what: &str) -> Result<T, St
 }
 
 fn build(lut: &Lut, o: &FitOpts) -> Result<(InputSpace, OutputSpace, Settings, Option<f64>), String> {
-    let d = detect(lut);
-    let mut input = d.input.value;
-    if let Some(id) = &o.input {
-        input = InputSpace::new(parse_id::<CameraSpaceId>(id, "input space")?);
-    }
-    if let Some(ei) = o.ei {
-        input.arri_ei = ei;
-    }
-    let mut output = d.output_space();
-    if let Some(g) = &o.gamut {
-        output.gamut = parse_id::<DisplayGamut>(g, "gamut")?;
-    }
-    if let Some(t) = &o.transfer {
-        output.transfer = parse_transfer(t, None)?;
-    }
-    if let (Some(p), DisplayTransfer::Pq { peak_nits }) = (o.peak, &mut output.transfer) {
-        *peak_nits = p;
-    }
+    let (input, output, d) = o.spaces.resolve(lut)?;
     let s = Settings {
         white_mode: match o.white.as_str() {
             "d65" => WhiteMode::D65,
@@ -267,6 +317,73 @@ fn print_analysis(file: &str, a: &Analysis) {
         println!("  {tag:<15} {}", d.message);
     }
     println!();
+}
+
+fn print_match(m: &OpenDrtMatch) {
+    println!("{}", m.lut_name.as_deref().unwrap_or("?"));
+    println!("  {:<15} {}", "Input", m.input.name());
+    println!("  {:<15} {}", "Output", m.output.name());
+    println!("  {:<15} {} of {} inside the LUT's input range", "Samples", m.samples_used, m.samples_total);
+    println!("  {:<15} {} (weighted {:.2})", "Start", m.start.description, m.start.score);
+    println!("  {:<15} {} mean / p95 / max", "Error", m.metric.label());
+    for (name, s) in [("stock", &m.stock), ("best preset", &m.best_preset), ("fitted", &m.fitted)] {
+        println!("  {:<15}   {name:<12} {:.2} / {:.2} / {:.2}", "", s.mean, s.p95, s.max);
+    }
+    println!("  {:<15} (stock = Standard look, ACES-2.0 tonescale, 10 nits grey)", "");
+    println!("  {:<15} {:.2} nits (Display Grey Luminance)", "Grey", m.config.grey_nits);
+    if !m.frozen.is_empty() {
+        println!("  {:<15} {}", "Frozen", m.frozen.join(", "));
+    }
+    let s = &m.safety;
+    println!(
+        "  {:<15} {} (finite/in range: {}, reversals: {}, roughness {:.4} vs stock {:.4})",
+        "Safety",
+        if s.ok() { "ok" } else { "CHECK" },
+        s.finite_in_range,
+        s.reversals.len(),
+        s.roughness,
+        s.stock_roughness
+    );
+    for r in s.reversals.iter().take(5) {
+        println!("  {:<15}   {}: luminance falls {:.1}% at {:+.2} stops", "", r.colour, r.drop_percent, r.at_stops);
+    }
+    for n in &m.notes {
+        println!("  {:<15} {n}", "Note");
+    }
+    println!("  {:<15} {:.0} s", "Time", m.seconds);
+}
+
+fn run_opendrt(cmd: OdrtCmd) -> Result<(), String> {
+    match cmd {
+        OdrtCmd::Fit { file, spaces, freeze, reg, iterations, starts, no_auto_freeze, out, json } => {
+            let lut = Lut::load(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let (input, output, _) = spaces.resolve(&lut)?;
+            let settings = MatchSettings {
+                freeze,
+                regularization: reg,
+                max_iterations: iterations,
+                starts,
+                auto_freeze_brilliance: !no_auto_freeze,
+                ..MatchSettings::default()
+            };
+            let m = match_opendrt(&lut, lut.filename.clone(), input, output, &settings).map_err(|e| e.to_string())?;
+            let body = serde_json::to_string_pretty(&m).unwrap() + "\n";
+            if json {
+                print!("{body}");
+            } else {
+                print_match(&m);
+            }
+            let path = out.unwrap_or_else(|| {
+                let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                file.with_file_name(format!("{stem}_opendrt_match.json"))
+            });
+            std::fs::write(&path, body).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            if !json {
+                println!("wrote {}", path.display());
+            }
+            Ok(())
+        }
+    }
 }
 
 fn conf(c: Confidence) -> &'static str {
@@ -393,6 +510,13 @@ fn main() -> ExitCode {
             println!("{}", meta.fit_error);
             ExitCode::SUCCESS
         }
+        Cmd::Opendrt(cmd) => match run_opendrt(cmd) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Cmd::Fit { file, opts, json } => {
             let lut = match Lut::load(&file) {
                 Ok(l) => l,

@@ -66,6 +66,10 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   match specific LUTs (ARRI K1S1, Ulook4b, DLook10, Goodrich, ARRI LogC4 709,
   5207 pull 2 / 2393); ACES2065-1 linear LUT input; parameter freezing and regularisation.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.
+- OpenDRT LUT matching in Rust (`lutmatrix_core::opendrt_match`, CLI `lutmatrix opendrt
+  fit`): fits every OpenDRT look parameter plus grey to a LUT, with safety checks (range,
+  exposure-sweep luminance reversals with automatic brilliance freeze, smoothness vs stock
+  looks). Replaces the Python/C++ tooling for fitting.
 - ACES2065-1 (linear AP0) input space (`aces2065_ap0`), with detection; "709G24"-style
   names detected as gamma 2.4 / 2.2.
 - `lutmatrix-opendrt` crate: a Rust port of OpenDRT v1.1.0 (Jed Smith, GPLv3) as used in

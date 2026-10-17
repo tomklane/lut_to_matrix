@@ -160,6 +160,7 @@ dependencies = [
 name = "lutmatrix-core"
 version = "0.1.0"
 dependencies = [
+ "lutmatrix-opendrt",
  "nalgebra",
  "regex",
  "serde",

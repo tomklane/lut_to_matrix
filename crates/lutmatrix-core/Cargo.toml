@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+lutmatrix-opendrt.workspace = true
 nalgebra.workspace = true
 serde.workspace = true
 serde_json.workspace = true

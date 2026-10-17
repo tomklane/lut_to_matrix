@@ -54,6 +54,18 @@ directly before that same transform. Options: `--through-input` (default
 `da_vinci_intermediate_dwg`), `--through-gamut`, `--through-transfer` (default: the LUT's
 own output).
 
+### Match OpenDRT to a LUT
+
+```sh
+lutmatrix opendrt fit "My LUT.cube"     # writes My LUT_opendrt_match.json next to the LUT
+lutmatrix opendrt fit --input arri_log_c3_awg3 --freeze brl "x.cube"
+```
+
+Fits every OpenDRT v1.1.0 look parameter and the Display Grey Luminance so that OpenDRT
+(DaVinci Wide Gamut / Intermediate in, the LUT's display out) reproduces the LUT. The
+report compares the stock Standard look, the best unmodified preset and the fit, and runs
+safety checks (output range, luminance never falling as exposure rises, smoothness).
+
 ### Export a DCTL
 
 ```sh
