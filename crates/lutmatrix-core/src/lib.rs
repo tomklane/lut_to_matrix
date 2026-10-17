@@ -5,6 +5,7 @@
 //! front ends over it.
 
 pub mod analysis;
+pub mod dctl;
 pub mod detect;
 pub mod difference;
 pub mod fit;

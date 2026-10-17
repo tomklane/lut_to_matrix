@@ -155,3 +155,20 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   (e.g. P3-DCI white, a warm/cool look) is removed by the CAT while its colour
   relationships are kept.
 - `lock_neutral` stays off by default; it only affects preserve mode.
+
+## D21 — DCTL portability and precision
+- Matrices are separate `__DEVICE__ Mat3x3 DWG_TO_XYZ() / M_XYZ() / XYZ_TO_DWG()`
+  functions returning a `typedef struct` of three `float3` rows, multiplied by an explicit
+  per-component `mat_mul`. No `__CONSTANT__` arrays (Metal needs `__CONSTANTREF__` to pass
+  them, a common source of backend-specific breakage) and no float3 operators (not
+  available on every backend).
+- Literals: 10 decimals with an `f` suffix (float32 resolves ~7.2 significant digits).
+- The file is ASCII-only, including comments.
+- Blend: XYZ' = XYZ + (M·XYZ − XYZ)·amount in linear XYZ, slider 0–1, default 1.
+- Verification without Resolve: (1) a float32 Rust emulation reads the coefficients back
+  out of the generated text and matches the f64 pipeline to ~1e-6 (relative, DI code);
+  (2) the generated file is compiled with `-Wall -Werror` as C99 and C++14 against a
+  shim for the DCTL built-ins and executed, and its output checked the same way (C99 ≈
+  OpenCL C, C++ ≈ CUDA / Metal Shading Language); (3) a golden file catches unintended
+  changes. Final confirmation in Resolve (CUDA, OpenCL, Metal) is by the user.
+- Header date is UTC.
