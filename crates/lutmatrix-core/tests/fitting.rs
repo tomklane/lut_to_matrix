@@ -358,3 +358,95 @@ fn d65_is_the_default_white_mode() {
     let d65 = whites::D65.to_xyz();
     assert!((a.m_xyz * d65 - d65).abs().max() < 1e-12);
 }
+
+// ---------------------------------------------------------------------------
+// Fitting through a reference display transform
+// ---------------------------------------------------------------------------
+mod through {
+    use super::*;
+    use lutmatrix_core::analysis::{analyze_with, Reference};
+    use lutmatrix_core::spaces::davinci::{di_decode, di_encode, dwg_to_xyz, xyz_to_dwg};
+
+    /// A per-channel filmic DRT, DWG/DI in → Rec.709 gamma 2.4 out (like many real DRTs,
+    /// it adds saturation through its per-channel curve).
+    fn drt(code: &Vec3) -> Vec3 {
+        let xyz = dwg_to_xyz() * code.map(di_decode);
+        let rgb = DisplayGamut::Rec709.primaries().xyz_to_rgb() * xyz;
+        let tone = |v: f64| {
+            let v = v.max(0.0) * 1.6;
+            (v * v / (v * v + 0.12)).powf(0.9)
+        };
+        rgb.map(|v| tone(v).powf(1.0 / 2.4))
+    }
+
+    /// LUT that is "DRT after a known XYZ matrix": camera log → DRT(M·scene).
+    fn lut_through(input: InputSpace, m_true: Mat3) -> impl Fn(&Vec3) -> Vec3 {
+        let cam_to_xyz = input.rgb_to_xyz_d65();
+        move |code: &Vec3| drt(&(xyz_to_dwg() * (m_true * (cam_to_xyz * input.decode(code)))).map(di_encode))
+    }
+
+    fn with_d65_fixed(m: Mat3) -> Mat3 {
+        // M' = M + (w − M·w)·wᵀ/|w|²  ⇒  M'·w = w
+        let w = whites::D65.to_xyz();
+        m + (w - m * w) * w.transpose() / w.norm_squared()
+    }
+
+    fn reference() -> FnTransform<fn(&Vec3) -> Vec3> {
+        FnTransform(drt as fn(&Vec3) -> Vec3)
+    }
+
+    fn run_through(m_true: Mat3, white_mode: WhiteMode) -> Analysis {
+        let input = InputSpace::new(CameraSpaceId::ArriLogC3Awg3);
+        let out = sdr(DisplayGamut::Rec709, 2.4);
+        let r = reference();
+        let rf = Reference {
+            transform: &r,
+            name: "test DRT".into(),
+            input: InputSpace::new(CameraSpaceId::DaVinciIntermediateDwg),
+            output: out,
+        };
+        let lut = FnTransform(lut_through(input, m_true));
+        let s = Settings { white_mode, ..Settings::default() };
+        analyze_with(&lut, input, out, &s, None, Some(&rf)).expect("analysis")
+    }
+
+    #[test]
+    fn recovers_matrix_through_nonlinear_drt_d65() {
+        let m_true = with_d65_fixed(look_matrix());
+        let a = run_through(m_true, WhiteMode::D65);
+        let err = (a.m_xyz - m_true).abs().max();
+        assert!(err < 1e-5, "through-DRT recovery error {err:e}\n{}", a.m_xyz);
+        let r = a.reference.as_ref().unwrap();
+        assert!(r.gain_percent > 95.0, "gain {}", r.gain_percent);
+        assert!(a.stats_refined.as_ref().unwrap().mean < 1e-3);
+        // The plain colorimetric matrix is a poor fit through this DRT (double counting).
+        assert!(r.stats_colorimetric.mean > 10.0 * a.stats_refined.as_ref().unwrap().mean.max(1e-4));
+        assert_eq!(a.settings.bracket_stops, 1.0, "through mode defaults to a ±1 stop bracket");
+    }
+
+    #[test]
+    fn recovers_white_shifting_matrix_in_preserve_mode() {
+        let m_true = look_matrix();
+        let a = run_through(m_true, WhiteMode::PreserveLut);
+        let err = (a.m_xyz - m_true).abs().max();
+        assert!(err < 1e-5, "{err:e}\n{}", a.m_xyz);
+    }
+
+    #[test]
+    fn lut_equal_to_reference_gives_identity_and_warns() {
+        let a = run_through(Mat3::identity(), WhiteMode::D65);
+        assert!((a.m_xyz - Mat3::identity()).abs().max() < 1e-6);
+        assert!(a.diagnostics.iter().any(|d| d.code == "small_gain"), "{:#?}", a.diagnostics);
+    }
+
+    #[test]
+    fn dctl_header_names_the_reference() {
+        use lutmatrix_core::dctl::{generate_dctl, ExportMeta};
+        let a = run_through(with_d65_fixed(look_matrix()), WhiteMode::D65);
+        let meta = ExportMeta::from_analysis(&a, "x.cube", "2026-10-16");
+        let src = generate_dctl(&a.m_xyz, &meta);
+        assert!(src.contains("// Fitted through: test DRT"));
+        assert!(src.contains("USE THIS DCTL DIRECTLY BEFORE THAT TRANSFORM"));
+        assert!(!src.contains("before the output transform."));
+    }
+}

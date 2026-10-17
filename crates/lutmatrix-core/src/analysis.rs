@@ -67,6 +67,35 @@ pub struct SampleReport {
     pub swatch_matrix: String,
 }
 
+/// A display transform that follows the DCTL in the grade (e.g. a 65-point LUT
+/// exported from Resolve of the CST or OpenDRT node after the DCTL). With one, the
+/// matrix is fitted *through* it: minimise ΔE(reference(M·x), LUT(x)), because a DRT
+/// after the DCTL already adds its own rendering (DECISIONS.md D22–D23).
+pub struct Reference<'a> {
+    pub transform: &'a dyn Transform,
+    pub name: String,
+    /// Encoding the reference expects (normally DWG / DaVinci Intermediate).
+    pub input: InputSpace,
+    /// Display encoding of the reference's output (normally the LUT's output space).
+    pub output: OutputSpace,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReferenceReport {
+    pub name: String,
+    pub input_name: String,
+    pub output_name: String,
+    /// Error of the reference transform alone (identity matrix) against the LUT.
+    pub stats_alone: FitStats,
+    /// Error of the plain colorimetric fit (no reference) when followed by the reference.
+    pub stats_colorimetric: FitStats,
+    /// Relative reduction in mean error, fitted matrix vs reference alone (%).
+    pub gain_percent: f64,
+    /// How much brighter (+) the reference renders scene middle gray than the LUT, stops.
+    /// The fit ignores it (exposure matched); set it with exposure, not the matrix.
+    pub gray_offset_stops: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Analysis {
     pub version: &'static str,
@@ -78,13 +107,17 @@ pub struct Analysis {
     pub metric: Metric,
 
     /// The matrix to export: refined if `settings.refine`, else least squares.
+    #[serde(serialize_with = "crate::math::ser::mat")]
     pub m_xyz: Mat3,
+    #[serde(serialize_with = "crate::math::ser::mat")]
     pub m_xyz_ls: Mat3,
+    #[serde(serialize_with = "crate::math::ser::opt_mat")]
     pub m_xyz_refined: Option<Mat3>,
     pub stats_ls: FitStats,
     pub stats_refined: Option<FitStats>,
 
     /// CAT applied to the LUT output in D65 mode (measured LUT white → D65).
+    #[serde(serialize_with = "crate::math::ser::opt_mat")]
     pub white_adaptation: Option<Mat3>,
     /// Chromaticity of the LUT's rendering of scene neutral gray.
     pub lut_white_xy: Xy,
@@ -103,6 +136,8 @@ pub struct Analysis {
     pub samples_skipped: Vec<(SampleStatus, usize)>,
     pub samples: Vec<SampleReport>,
     pub diagnostics: Vec<Diagnostic>,
+    /// Present when fitted through a reference display transform.
+    pub reference: Option<ReferenceReport>,
 }
 
 pub fn uv_prime(xyz: &Vec3) -> (f64, f64) {
@@ -156,7 +191,7 @@ pub fn analyze(
     if lut.cube.is_none() && lut.shaper.is_none() {
         return Err(AnalysisError::EmptyLut);
     }
-    analyze_transform(lut, input, output, settings, middle_gray_hint)
+    analyze_with(lut, input, output, settings, middle_gray_hint, None)
 }
 
 /// As [`analyze`], for any [`Transform`].
@@ -167,6 +202,25 @@ pub fn analyze_transform(
     settings: &Settings,
     middle_gray_hint: Option<f64>,
 ) -> Result<Analysis, AnalysisError> {
+    analyze_with(lut, input, output, settings, middle_gray_hint, None)
+}
+
+/// Full analysis, optionally fitting through a reference display transform.
+pub fn analyze_with(
+    lut: &dyn Transform,
+    input: InputSpace,
+    output: OutputSpace,
+    settings: &Settings,
+    middle_gray_hint: Option<f64>,
+    reference: Option<&Reference>,
+) -> Result<Analysis, AnalysisError> {
+    // Through a DRT, the LUT's and the DRT's tone curves differ with exposure, so a
+    // single exposure under-constrains the fit: default to a ±1 stop bracket.
+    let mut eff = settings.clone();
+    if reference.is_some() && eff.bracket_stops == 0.0 {
+        eff.bracket_stops = 1.0;
+    }
+    let settings = &eff;
     let m = measure(lut, input, output, settings, middle_gray_hint)?;
     let d65 = whites::D65.to_xyz();
     let lvl0 = m.level_index(0.0);
@@ -230,19 +284,112 @@ pub fn analyze_transform(
         errors(mm).into_iter().zip(&sqrt_w).map(|(e, w)| e * w).collect()
     };
 
-    let m_refined = settings.refine.then(|| {
-        let param = if constrained { Param::Neutral { w: d65 } } else { Param::Free };
-        refine(&m_ls, &param, &residuals)
+    // ---- through a reference display transform (optional) --------------------
+    // pred_i = ref(M·x_i) scaled so the reference's gray matches the LUT's gray at the
+    // same exposure level; target_i = (adapted) LUT output. Both in cd/m².
+    let level_of: Vec<usize> = used.iter().map(|&i| m.level_index(m.samples[i].stops)).collect();
+    let targets: Vec<Vec3> = used.iter().map(|&i| adapt * m.samples[i].probe.xyz_out).collect();
+    let gray_in: Vec<Vec3> = m.levels.iter().map(|l| d65 * m.anchor_scene_y * 2f64.powf(*l)).collect();
+    let through = reference.map(|r| {
+        let to_in = r.input.xyz_d65_to_rgb();
+        let to_xyz = r.output.rgb_to_xyz();
+        let interp = settings.interpolation;
+        move |mm: &Mat3, x: &Vec3| -> Vec3 {
+            let code = r.input.encode(&(to_in * (mm * x)));
+            to_xyz * r.output.decode(&r.transform.apply_rgb(&code, interp))
+        }
     });
+    // Exposure-matched predictions through the reference.
+    let through_pred = |mm: &Mat3| -> Vec<Vec3> {
+        let f = through.as_ref().expect("reference");
+        let scale: Vec<f64> = gray_in
+            .iter()
+            .zip(&m.gray_out_nits)
+            .map(|(g, lut_y)| lut_y / f(mm, g).y.max(1e-9))
+            .collect();
+        xs.iter().zip(&level_of).map(|(x, &l)| f(mm, x) * scale[l]).collect()
+    };
+    let through_errors = |mm: &Mat3| -> Vec<f64> {
+        through_pred(mm).iter().zip(&targets).map(|(p, t)| scorer.delta(p, t)).collect()
+    };
+    // Smooth per-component residuals (weighted) for the first optimisation pass.
+    let through_components = |mm: &Mat3| -> Vec<f64> {
+        through_pred(mm)
+            .iter()
+            .zip(&targets)
+            .zip(&sqrt_w)
+            .flat_map(|((p, t), w)| scorer.components(p, t).map(|c| c * w))
+            .collect()
+    };
+    let objective = |mm: &Mat3| -> Vec<f64> {
+        if through.is_some() {
+            through_errors(mm)
+        } else {
+            errors(mm)
+        }
+    };
+    let weighted = |mm: &Mat3| -> Vec<f64> {
+        objective(mm).into_iter().zip(&sqrt_w).map(|(e, w)| e * w).collect()
+    };
+    let cost = |mm: &Mat3| weighted(mm).iter().map(|v| v * v).sum::<f64>();
 
+    let m_refined = if through.is_some() {
+        // Through a DRT the neutral constraint is unity gain (exposure is matched
+        // separately). Start from the better of identity (DRT alone) and the
+        // colorimetric fit, then refine.
+        let unity = m_ls / (m_ls * d65).y;
+        let start = if cost(&Mat3::identity()) <= cost(&unity) { Mat3::identity() } else { unity };
+        let param = if settings.white_mode == WhiteMode::D65 { Param::Neutral { w: d65 } } else { Param::Free };
+        // Pass 1: smooth component residuals (ΔE ITP components or ΔL*a*b*), which
+        // converge cleanly; pass 2: polish on the actual metric (ΔE2000 has a kink at
+        // zero that stalls Gauss–Newton if used from the start).
+        let coarse = refine(&start, &param, &through_components);
+        let coarse = if settings.white_mode == WhiteMode::D65 { coarse } else { coarse / (coarse * d65).y };
+        let fitted = refine(&coarse, &param, &weighted);
+        // Exposure is matched per level, so the matrix's overall scale is free; fix it
+        // to unity luminance gain on neutral (exposure belongs to the grade, not M).
+        Some(fitted / (fitted * d65).y)
+    } else {
+        settings.refine.then(|| {
+            let param = if constrained { Param::Neutral { w: d65 } } else { Param::Free };
+            refine(&m_ls, &param, &residuals)
+        })
+    };
+
+    // Neutral check: in display space through the reference, else in fit units.
+    let neutral_pair = |mm: &Mat3| -> (Vec3, Vec3) {
+        match &through {
+            Some(f) => (f(mm, &gray_in[lvl0]), adapt * m.gray_out_xyz),
+            None => (mm * d65, neutral_target),
+        }
+    };
     let stats_for = |mm: &Mat3| -> (FitStats, Vec<f64>) {
-        let errs = errors(mm);
-        let stats = summarise(&m, &used, &errs, metric, &(mm * d65), &neutral_target);
+        let errs = objective(mm);
+        let (np, nt) = neutral_pair(mm);
+        let stats = summarise(&m, &used, &errs, metric, &np, &nt);
         (stats, errs)
     };
     let (stats_ls, errs_ls) = stats_for(&m_ls);
     let refined = m_refined.as_ref().map(stats_for);
     let m_xyz = m_refined.unwrap_or(m_ls);
+
+    let reference_report = reference.map(|r| {
+        let f = through.as_ref().unwrap();
+        let (alone, _) = stats_for(&Mat3::identity());
+        let colorimetric = stats_for(&m_ls).0;
+        let fitted = &refined.as_ref().unwrap().0;
+        let ref_gray = f(&Mat3::identity(), &gray_in[lvl0]).y;
+        ReferenceReport {
+            name: r.name.clone(),
+            input_name: r.input.name(),
+            output_name: r.output.name(),
+            // If the reference alone already matches (≈0 error) there is nothing to gain.
+            gain_percent: if alone.mean < 1e-3 { 0.0 } else { 100.0 * (1.0 - fitted.mean / alone.mean) },
+            stats_alone: alone,
+            stats_colorimetric: colorimetric,
+            gray_offset_stops: (ref_gray.max(1e-9) / m.gray_out_nits[lvl0]).log2(),
+        }
+    });
 
     // ---- per-sample report --------------------------------------------------
     let mut err_ls = vec![None; m.samples.len()];
@@ -272,7 +419,13 @@ pub fn analyze_transform(
                 swatch_input: swatch(&s.xyz_in, gray_scene),
                 swatch_lut: swatch(&s.probe.xyz_out, gray_disp),
                 swatch_target: swatch(&target, gray_disp),
-                swatch_matrix: swatch(&(m_xyz * s.xyz_in / k), gray_disp),
+                swatch_matrix: match &through {
+                    Some(f) => {
+                        let scale = gray_disp / f(&m_xyz, &gray_in[li]).y.max(1e-9);
+                        swatch(&(f(&m_xyz, &s.xyz_in) * scale), gray_disp)
+                    }
+                    None => swatch(&(m_xyz * s.xyz_in / k), gray_disp),
+                },
             }
         })
         .collect();
@@ -308,6 +461,7 @@ pub fn analyze_transform(
         stats: final_stats,
         used: used.len(),
         total: m.samples.len(),
+        reference: reference_report.as_ref(),
     });
 
     Ok(Analysis {
@@ -337,6 +491,7 @@ pub fn analyze_transform(
         samples_skipped: skipped,
         samples,
         diagnostics,
+        reference: reference_report,
     })
 }
 
@@ -404,6 +559,7 @@ struct DiagInput<'a> {
     stats: &'a FitStats,
     used: usize,
     total: usize,
+    reference: Option<&'a ReferenceReport>,
 }
 
 /// Output chroma (u′v′ distance from that exposure's gray) and hue angle, for one
@@ -464,6 +620,35 @@ fn diagnose(d: &DiagInput) -> Vec<Diagnostic> {
     );
 
     let mut warn = Vec::new();
+    if let Some(r) = d.reference {
+        out.push(Diagnostic {
+            severity: Severity::Info,
+            code: "reference",
+            message: format!(
+                "Fitted through \"{}\": mean {metric} {:.2} vs {:.2} for the transform alone ({:+.0}%), and {:.2} for the plain colorimetric matrix.",
+                r.name, d.stats.mean, r.stats_alone.mean, -r.gain_percent, r.stats_colorimetric.mean
+            ),
+        });
+        if r.gray_offset_stops.abs() > 0.1 {
+            out.push(Diagnostic {
+                severity: Severity::Info,
+                code: "reference_exposure",
+                message: format!(
+                    "The reference renders middle gray {:+.2} stops vs the LUT; the fit ignores this (match it with exposure, not the matrix).",
+                    r.gray_offset_stops
+                ),
+            });
+        }
+        if r.gain_percent < 5.0 {
+            warn.push((
+                "small_gain",
+                format!(
+                    "The matrix improves on \"{}\" alone by only {:.0}%: the display transform already renders this LUT's colour about as well as a 3×3 matrix can.",
+                    r.name, r.gain_percent.max(0.0)
+                ),
+            ));
+        }
+    }
     // Exposure behaviour of colour: probe ±1 stop around the anchor.
     let ring = crate::sample::hue_ring(
         &Settings { hues: 12, saturations: vec![0.5], ..d.settings.clone() },

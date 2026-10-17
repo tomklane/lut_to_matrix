@@ -24,6 +24,7 @@ fn meta() -> ExportMeta {
         middle_gray: "scene 0.1800, display 12.81 cd/m2".into(),
         fit_error: "ΔE2000: mean 1.000, p95 2.000, max 3.000".into(),
         fit_method: "least squares, refined by minimising ΔE2000".into(),
+        reference: None,
         version: "{VERSION}".into(),
         date: "2026-01-01".into(),
     }

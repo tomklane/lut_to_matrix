@@ -38,6 +38,22 @@ lutmatrix fit --json "My LUT.cube"                # full analysis incl. per-samp
 mean/RMS/p95/max error (ΔE2000 for SDR, ΔE ITP for PQ), neutral-axis error, the
 worst hues, and warnings about the LUT's tone curve.
 
+### Fit through your display transform (recommended)
+
+If a display transform follows the DCTL in your grade (a CST to Rec.709, OpenDRT, ACES…),
+fit **through** it, otherwise the DCTL and the DRT both add rendering and the result
+over-shoots. In Resolve, right-click the node(s) that follow the DCTL (on a DWG /
+DaVinci Intermediate timeline) → *Generate LUT* → 65 Point Cube, then:
+
+```sh
+lutmatrix export --through "dwgdi_to_rec709G24_opendrt.cube" "My LUT.cube"
+```
+
+The report shows the error of the DRT alone vs with the matrix. Use the resulting DCTL
+directly before that same transform. Options: `--through-input` (default
+`da_vinci_intermediate_dwg`), `--through-gamut`, `--through-transfer` (default: the LUT's
+own output).
+
 ### Export a DCTL
 
 ```sh

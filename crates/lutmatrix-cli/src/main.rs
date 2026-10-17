@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use lutmatrix_core::analysis::{analyze, Analysis, Severity};
+use lutmatrix_core::analysis::{analyze_with, Analysis, Reference, Severity};
 use lutmatrix_core::dctl;
 use lutmatrix_core::detect::{detect, Confidence, Guess};
 use lutmatrix_core::difference::Metric;
@@ -98,6 +98,49 @@ struct FitOpts {
     /// Preserve mode: constrain the matrix to reproduce the LUT's white exactly.
     #[arg(long)]
     lock_neutral: bool,
+    /// Fit THROUGH this display transform: a LUT of the node that follows the DCTL
+    /// (e.g. a CST or OpenDRT exported from Resolve as a 65-point .cube).
+    #[arg(long, value_name = "LUT")]
+    through: Option<PathBuf>,
+    /// Input encoding of the --through LUT (default: da_vinci_intermediate_dwg).
+    #[arg(long, default_value = "da_vinci_intermediate_dwg")]
+    through_input: String,
+    /// Output gamut of the --through LUT (default: same as the LUT being matched).
+    #[arg(long)]
+    through_gamut: Option<String>,
+    /// Output transfer of the --through LUT: 2.2, 2.4, 2.6 or pq (default: same as the LUT).
+    #[arg(long)]
+    through_transfer: Option<String>,
+}
+
+fn parse_transfer(t: &str, peak: Option<f64>) -> Result<DisplayTransfer, String> {
+    Ok(match t.to_ascii_lowercase().as_str() {
+        "pq" | "st2084" => DisplayTransfer::Pq { peak_nits: peak.unwrap_or(1000.0) },
+        g => DisplayTransfer::Gamma { gamma: g.parse().map_err(|_| format!("bad transfer '{t}'"))? },
+    })
+}
+
+/// Load the --through reference (if any). Its output space defaults to the LUT's.
+fn load_reference(o: &FitOpts, lut_output: OutputSpace) -> Result<Option<(Lut, InputSpace, OutputSpace, String)>, String> {
+    let Some(path) = &o.through else { return Ok(None) };
+    let lut = Lut::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let input = InputSpace::new(parse_id::<CameraSpaceId>(&o.through_input, "input space")?);
+    let mut out = lut_output;
+    if let Some(g) = &o.through_gamut {
+        out.gamut = parse_id::<DisplayGamut>(g, "gamut")?;
+    }
+    if let Some(t) = &o.through_transfer {
+        out.transfer = parse_transfer(t, o.peak)?;
+    }
+    let name = lut.filename.clone().unwrap_or_else(|| path.display().to_string());
+    Ok(Some((lut, input, out, name)))
+}
+
+fn run_analysis(lut: &Lut, o: &FitOpts) -> Result<Analysis, String> {
+    let (input, output, settings, hint) = build(lut, o)?;
+    let reference = load_reference(o, output)?;
+    let r = reference.as_ref().map(|(l, i, out, name)| Reference { transform: l, name: name.clone(), input: *i, output: *out });
+    analyze_with(lut, input, output, &settings, hint, r.as_ref()).map_err(|e| e.to_string())
 }
 
 fn parse_id<T: serde::de::DeserializeOwned>(s: &str, what: &str) -> Result<T, String> {
@@ -118,10 +161,7 @@ fn build(lut: &Lut, o: &FitOpts) -> Result<(InputSpace, OutputSpace, Settings, O
         output.gamut = parse_id::<DisplayGamut>(g, "gamut")?;
     }
     if let Some(t) = &o.transfer {
-        output.transfer = match t.to_ascii_lowercase().as_str() {
-            "pq" | "st2084" => DisplayTransfer::Pq { peak_nits: 1000.0 },
-            g => DisplayTransfer::Gamma { gamma: g.parse().map_err(|_| format!("bad transfer '{t}'"))? },
-        };
+        output.transfer = parse_transfer(t, None)?;
     }
     if let (Some(p), DisplayTransfer::Pq { peak_nits }) = (o.peak, &mut output.transfer) {
         *peak_nits = p;
@@ -186,9 +226,14 @@ fn print_analysis(file: &str, a: &Analysis) {
             .map(|(s, n)| format!(", {n} {}", s.label()))
             .collect::<String>()
     );
-    print_matrix("M_XYZ (least squares)", &a.m_xyz_ls);
+    if let Some(r) = &a.reference {
+        println!("  Fitted through  {} ({} → {})", r.name, r.input_name, r.output_name);
+    }
+    let ls_name = if a.reference.is_some() { "M_XYZ (colorimetric least squares, for comparison)" } else { "M_XYZ (least squares)" };
+    print_matrix(ls_name, &a.m_xyz_ls);
     if let Some(m) = &a.m_xyz_refined {
-        print_matrix(&format!("M_XYZ (refined, min {})", a.metric.label()), m);
+        let what = if a.reference.is_some() { "fitted through reference" } else { "refined" };
+        print_matrix(&format!("M_XYZ ({what}, min {})", a.metric.label()), m);
     }
     let row = |name: &str, s: &lutmatrix_core::analysis::FitStats| {
         println!(
@@ -196,7 +241,12 @@ fn print_analysis(file: &str, a: &Analysis) {
             s.metric.label(), s.mean, s.rms, s.p95, s.max, s.neutral, s.neutral_duv
         );
     };
-    row("Error (LS)", &a.stats_ls);
+    if let Some(r) = &a.reference {
+        row("Ref alone", &r.stats_alone);
+        row("Colorimetric", &r.stats_colorimetric);
+    } else {
+        row("Error (LS)", &a.stats_ls);
+    }
     if let Some(s) = &a.stats_refined {
         row("Error (refined)", s);
     }
@@ -315,14 +365,7 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let (input, output, settings, hint) = match build(&lut, &opts) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("{e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            let a = match analyze(&lut, input, output, &settings, hint) {
+            let a = match run_analysis(&lut, &opts) {
                 Ok(a) => a,
                 Err(e) => {
                     eprintln!("{}: {e}", file.display());
@@ -358,14 +401,7 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let (input, output, settings, hint) = match build(&lut, &opts) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("{e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            match analyze(&lut, input, output, &settings, hint) {
+            match run_analysis(&lut, &opts) {
                 Ok(a) if json => {
                     println!("{}", serde_json::to_string_pretty(&a).unwrap());
                     ExitCode::SUCCESS

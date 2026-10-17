@@ -170,6 +170,22 @@ pub struct Scorer {
 }
 
 impl Scorer {
+    /// Smooth per-component difference for optimisers: ΔE ITP components
+    /// 720·(ΔI, ½ΔCt, ΔCp) (their norm *is* ΔE ITP), or CIELAB (ΔL*, Δa*, Δb*) (norm =
+    /// ΔE76) when the metric is ΔE2000.
+    pub fn components(&self, a: &Vec3, b: &Vec3) -> [f64; 3] {
+        match self.metric {
+            Metric::DeltaEItp => {
+                let d = xyz_nits_to_ictcp(a) - xyz_nits_to_ictcp(b);
+                [720.0 * d.x, 360.0 * d.y, 720.0 * d.z]
+            }
+            _ => {
+                let d = xyz_to_lab(a, &self.lab_white) - xyz_to_lab(b, &self.lab_white);
+                [d.x, d.y, d.z]
+            }
+        }
+    }
+
     pub fn delta(&self, a: &Vec3, b: &Vec3) -> f64 {
         match self.metric {
             Metric::DeltaEItp => delta_e_itp(&xyz_nits_to_ictcp(a), &xyz_nits_to_ictcp(b)),

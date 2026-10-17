@@ -154,3 +154,26 @@ mod tests {
         }
     }
 }
+
+/// Serde helpers: write matrices as row-major nested arrays (`[[r0], [r1], [r2]]`),
+/// not nalgebra's default flat column-major list, so JSON readers can't transpose them.
+pub mod ser {
+    use super::Mat3;
+    use serde::Serializer;
+
+    fn rows(m: &Mat3) -> [[f64; 3]; 3] {
+        [
+            [m[(0, 0)], m[(0, 1)], m[(0, 2)]],
+            [m[(1, 0)], m[(1, 1)], m[(1, 2)]],
+            [m[(2, 0)], m[(2, 1)], m[(2, 2)]],
+        ]
+    }
+
+    pub fn mat<S: Serializer>(m: &Mat3, s: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&rows(m), s)
+    }
+
+    pub fn opt_mat<S: Serializer>(m: &Option<Mat3>, s: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&m.as_ref().map(rows), s)
+    }
+}

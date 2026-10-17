@@ -8,6 +8,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - D65 is now the default white mode (CLI `--white` defaults to `d65`).
+- Analysis JSON writes matrices as row-major nested arrays.
 
 ### Added
 - Cargo workspace with `lutmatrix-core` (library) and `lutmatrix-cli` crates; version
@@ -56,4 +57,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   equivalent single linear-DWG matrix.
 - `lutmatrix export` CLI command (writes .dctl, .json, .txt).
 - DCTL tests: float32 emulation vs f64, golden file, C99/C++ compile-and-run check.
+- Fit through a reference display transform (`--through <LUT>`): the matrix is fitted
+  so that the DRT that follows the DCTL (a CST, OpenDRT, … exported from Resolve as a
+  LUT) reproduces the source LUT, exposure matched, with a report of the gain over the
+  DRT alone; the DCTL header names the reference.
 - GitHub Actions CI: tests and clippy on macOS, Windows and Linux.

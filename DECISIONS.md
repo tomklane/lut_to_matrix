@@ -194,3 +194,23 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   a LUT the user exports from Resolve (DWG/DI → display) for whatever CST/DRT follows the
   DCTL — and fit through it. Ulook4b's split tone (warm highlights, cool shadows) and its
   yellow handling remain out of reach of any 3×3 matrix.
+
+## D23 — Fit through a reference display transform (user decision 2026-10-16)
+- `--through <LUT>` (CLI) / `Reference` (core): a LUT of the node that follows the DCTL
+  (DWG/DI in → display out by default; generated in Resolve from a CST, OpenDRT, …).
+  The fit minimises ΔE(reference(M·x) × k_level, LUT(x)), where k_level matches the
+  reference's gray to the LUT's gray at each bracket level (exposure belongs to the grade,
+  not the matrix). D65 mode keeps M·D65 = D65; preserve mode is free, then scaled to unity
+  neutral luminance gain (the scale is otherwise undetermined under exposure matching).
+- Bracket defaults to ±1 stop in this mode (0 is treated as 1): the LUT's and the DRT's
+  tone curves differ with exposure, so one exposure under-constrains M.
+- Start: the better of identity (DRT alone) and the colorimetric LS matrix. Two passes:
+  smooth component residuals (720·(ΔI, ½ΔCt, ΔCp) for ITP — exactly ΔE ITP — or ΔL*a*b*
+  for SDR), then a polish on the scalar metric (ΔE2000's kink at zero stalls
+  Gauss–Newton from the start; seen as a 1.6e-4 recovery error, fixed to < 1e-5).
+- Report: error of the reference alone, of the colorimetric matrix through it, of the
+  fitted matrix, the % gain, and the reference/LUT gray offset. Warning if gain < 5 %.
+- The user's Resolve exports of OpenDRT and the CST as 65³ LUTs match our models to
+  7e-5 (OpenDRT) and reproduce the chart exports to 0.17 ΔE00 (CST).
+- Analysis JSON now writes matrices row-major (`[[r0],[r1],[r2]]`); nalgebra's default is
+  a flat column-major list, which a reader transposed during this work.
