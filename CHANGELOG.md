@@ -6,6 +6,9 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- D65 is now the default white mode (CLI `--white` defaults to `d65`).
+
 ### Added
 - Cargo workspace with `lutmatrix-core` (library) and `lutmatrix-cli` crates; version
   defined once in the root `Cargo.toml`.

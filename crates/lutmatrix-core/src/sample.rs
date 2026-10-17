@@ -27,9 +27,10 @@ pub enum GrayAnchor {
 #[serde(rename_all = "snake_case")]
 pub enum WhiteMode {
     /// Unconstrained fit: the LUT's neutral shift is baked into the matrix.
-    #[default]
     PreserveLut,
     /// D65 neutral in → D65 neutral out (CAT on the LUT output + neutral constraint).
+    /// The default (DECISIONS.md D20).
+    #[default]
     D65,
 }
 
@@ -93,7 +94,7 @@ impl Default for Settings {
             ring_limit: RingLimit::CameraAndDisplay,
             bracket_stops: 0.0,
             normalize_exposure: true,
-            white_mode: WhiteMode::PreserveLut,
+            white_mode: WhiteMode::D65,
             cat: Cat::Bradford,
             metric: Metric::Auto,
             refine: true,

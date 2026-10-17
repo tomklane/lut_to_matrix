@@ -148,3 +148,10 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   same refined matrix scores mean 1.64 ΔE2000 but 7.6 ΔE ITP: ITP is ~5× more sensitive
   around 13–26 cd/m² than ΔE2000 with a 203 cd/m² reference white, so the HDR threshold
   is scaled accordingly. `--metric de2000` gives a like-for-like comparison.
+
+## D20 — D65 is the default white mode
+- User decision (2026-10-16): D65 white mode is the default; "preserve LUT white" is the
+  option. The matrix then never introduces a neutral cast in DWG; a LUT's white cast
+  (e.g. P3-DCI white, a warm/cool look) is removed by the CAT while its colour
+  relationships are kept.
+- `lock_neutral` stays off by default; it only affects preserve mode.

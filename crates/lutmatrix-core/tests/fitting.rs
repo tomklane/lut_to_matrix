@@ -69,6 +69,12 @@ fn pq(g: DisplayGamut, peak: f64) -> OutputSpace {
     OutputSpace::new(g, DisplayTransfer::Pq { peak_nits: peak })
 }
 
+/// Preserve-LUT-white settings: needed wherever a test expects to recover a matrix
+/// that shifts white (D65 mode, the default, would remove that shift).
+fn preserve() -> Settings {
+    Settings { white_mode: WhiteMode::PreserveLut, ..Settings::default() }
+}
+
 fn run(lut: &Lut, input: InputSpace, output: OutputSpace, s: &Settings) -> Analysis {
     analyze(lut, input, output, s, None).expect("analysis")
 }
@@ -150,7 +156,7 @@ fn synthetic_round_trip_recovers_matrix() {
         let input = InputSpace::new(id);
         let gain = gain_at_gray / 0.18;
         for refine in [false, true] {
-            let s = Settings { refine, ..Settings::default() };
+            let s = Settings { refine, ..preserve() };
             let a = run_exact(exact(input, out, m_true, gain, Tone::None), input, out, &s);
             let err = (a.m_xyz - m_true).abs().max();
             assert!(err < TOL_EXACT, "{id:?} → {} exact refine={refine}: {err:e}\n{}", out.name(), a.m_xyz);
@@ -178,7 +184,7 @@ fn identity_colour_lut_gives_identity_matrix() {
         let input = InputSpace::new(id);
         let lut = build_lut(input, out, &Mat3::identity(), 11.0 / 0.18, Tone::None);
         for white_mode in [WhiteMode::PreserveLut, WhiteMode::D65] {
-            let s = Settings { white_mode, ..Settings::default() };
+            let s = Settings { white_mode, ..preserve() };
             let f = exact(input, out, Mat3::identity(), 11.0 / 0.18, Tone::None);
             let a = run_exact(f, input, out, &s);
             let err = (a.m_xyz - Mat3::identity()).abs().max();
@@ -203,20 +209,20 @@ fn p3_dci_white_preserved_or_removed() {
     let f = || exact(input, out, shift, 7.0 / 0.18, Tone::None);
 
     // Preserve: matrix keeps the DCI white shift.
-    let a = run_exact(f(), input, out, &Settings::default());
+    let a = run_exact(f(), input, out, &preserve());
     let w = Xy::from_xyz(&(a.m_xyz * d65));
     assert!((w.x - 0.314).abs() < 1e-9 && (w.y - 0.351).abs() < 1e-9, "preserve white {w:?}");
     assert!((a.m_xyz - shift).abs().max() < TOL_EXACT);
-    let a = run(&lut, input, out, &Settings::default());
+    let a = run(&lut, input, out, &preserve());
     let w = Xy::from_xyz(&(a.m_xyz * d65));
     assert!((w.x - 0.314).abs() < 2e-4 && (w.y - 0.351).abs() < 2e-4, "65³ preserve white {w:?}");
 
     // D65: neutral maps to D65 exactly. The colours are the LUT's colours adapted by
     // Bradford (measured white → D65), i.e. M = CAT · shift for this pure-matrix LUT.
-    let exact_a = run_exact(f(), input, out, &Settings { white_mode: WhiteMode::D65, ..Settings::default() });
+    let exact_a = run_exact(f(), input, out, &Settings { white_mode: WhiteMode::D65, ..preserve() });
     let cat = exact_a.white_adaptation.expect("CAT used");
     assert!((exact_a.m_xyz - cat * shift).abs().max() < TOL_EXACT, "{}", exact_a.m_xyz);
-    let grid_a = run(&lut, input, out, &Settings { white_mode: WhiteMode::D65, ..Settings::default() });
+    let grid_a = run(&lut, input, out, &Settings { white_mode: WhiteMode::D65, ..preserve() });
     for a in [&exact_a, &grid_a] {
         let wv = a.m_xyz * d65;
         assert!((wv - d65).abs().max() < 1e-12, "D65 neutral {wv:?}");
@@ -234,11 +240,11 @@ fn exposure_normalisation_removes_a_luminance_tone_curve() {
     let input = InputSpace::new(CameraSpaceId::ArriLogC3Awg3);
     let out = sdr(DisplayGamut::Rec709, 2.4);
     let m_true = look_matrix();
-    let a = run_exact(exact(input, out, m_true, 10.0 / 0.18, Tone::Luminance(tone)), input, out, &Settings::default());
+    let a = run_exact(exact(input, out, m_true, 10.0 / 0.18, Tone::Luminance(tone)), input, out, &preserve());
     assert!((a.m_xyz - m_true).abs().max() < TOL_EXACT, "{}", a.m_xyz);
     assert!((a.contrast_at_gray - 1.0).abs() > 0.05, "tone curve should be visible: contrast {}", a.contrast_at_gray);
     let lut = build_lut(input, out, &m_true, 10.0 / 0.18, Tone::Luminance(tone));
-    let a = run(&lut, input, out, &Settings::default());
+    let a = run(&lut, input, out, &preserve());
     let f = exact(input, out, m_true, 10.0 / 0.18, Tone::Luminance(tone));
     assert_grid_close(&a.m_xyz, &m_true, &lut, &f, input, out, "luminance tone curve 65³");
 }
@@ -253,7 +259,7 @@ fn per_channel_tone_curve_is_flagged() {
     let input = InputSpace::new(CameraSpaceId::ArriLogC4Awg4);
     let out = sdr(DisplayGamut::Rec709, 2.4);
     let lut = build_lut(input, out, &Mat3::identity(), 12.0 / 0.18, Tone::PerChannel(tone));
-    let a = run(&lut, input, out, &Settings::default());
+    let a = run(&lut, input, out, &preserve());
     assert!(
         a.diagnostics
             .iter()
@@ -270,7 +276,7 @@ fn anchor_b_samples_where_gray_hits_display_middle_gray() {
     }
     let input = InputSpace::new(CameraSpaceId::ArriLogC4Awg4);
     let out = sdr(DisplayGamut::Rec709, 2.4);
-    let s = Settings { anchor: GrayAnchor::DisplayTarget, display_middle_gray_nits: Some(12.0), ..Settings::default() };
+    let s = Settings { anchor: GrayAnchor::DisplayTarget, display_middle_gray_nits: Some(12.0), ..preserve() };
     let f = exact(input, out, Mat3::identity(), 12.0 / 0.18, Tone::Luminance(tone));
     let a = run_exact(f, input, out, &s);
     assert!((a.anchor_stops - 1.0).abs() < 1e-9, "anchor {}", a.anchor_stops);
@@ -288,12 +294,12 @@ fn bracket_and_constraints() {
     let out = sdr(DisplayGamut::Rec709, 2.4);
     let m_true = look_matrix();
     let f = || exact(input, out, m_true, 10.0 / 0.18, Tone::None);
-    let a = run_exact(f(), input, out, &Settings { bracket_stops: 0.5, ..Settings::default() });
+    let a = run_exact(f(), input, out, &Settings { bracket_stops: 0.5, ..preserve() });
     assert_eq!(a.samples.len(), 3 * (36 * 4 + 1));
     assert!((a.m_xyz - m_true).abs().max() < TOL_EXACT);
     // Lock neutral in preserve mode: M·D65 equals the LUT's white exactly.
     let lut = build_lut(input, out, &m_true, 10.0 / 0.18, Tone::None);
-    let a = run(&lut, input, out, &Settings { lock_neutral: true, ..Settings::default() });
+    let a = run(&lut, input, out, &Settings { lock_neutral: true, ..preserve() });
     let d65 = whites::D65.to_xyz();
     let measured_white = a.m_xyz * d65;
     assert!(a.stats_refined.as_ref().unwrap().neutral_duv < 1e-12);
@@ -305,7 +311,7 @@ fn out_of_gamut_and_clipped_samples_are_skipped() {
     let input = InputSpace::new(CameraSpaceId::ArriLogC4Awg4);
     let out = sdr(DisplayGamut::Rec709, 2.4);
     // Bright rendering so saturated colours clip at the top.
-    let s = Settings { ring_limit: RingLimit::Camera, saturations: vec![0.5, 1.2], ..Settings::default() };
+    let s = Settings { ring_limit: RingLimit::Camera, saturations: vec![0.5, 1.2], ..preserve() };
     let a = run_exact(exact(input, out, Mat3::identity(), 60.0 / 0.18, Tone::None), input, out, &s);
     let count = |st| a.samples.iter().filter(|r| r.status == st).count();
     assert!(count(SampleStatus::OutsideCameraGamut) >= 30, "outside camera gamut");
@@ -340,4 +346,15 @@ fn report_grid_interpolation_error() {
         }
         println!("{size}³: LUT interpolation ΔE2000 mean {:.3} max {:.3}", sum / ring.len() as f64, worst);
     }
+}
+
+#[test]
+fn d65_is_the_default_white_mode() {
+    assert_eq!(Settings::default().white_mode, WhiteMode::D65);
+    // With the default, a white-shifting look comes out D65-neutral.
+    let input = InputSpace::new(CameraSpaceId::ArriLogC4Awg4);
+    let out = sdr(DisplayGamut::Rec709, 2.4);
+    let a = run_exact(exact(input, out, look_matrix(), 10.0 / 0.18, Tone::None), input, out, &Settings::default());
+    let d65 = whites::D65.to_xyz();
+    assert!((a.m_xyz * d65 - d65).abs().max() < 1e-12);
 }

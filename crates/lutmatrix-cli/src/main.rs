@@ -58,8 +58,8 @@ struct FitOpts {
     /// PQ peak luminance (cd/m²).
     #[arg(long)]
     peak: Option<f64>,
-    /// White mode: preserve (default) or d65.
-    #[arg(long, default_value = "preserve")]
+    /// White mode: d65 (default) or preserve.
+    #[arg(long, default_value = "d65")]
     white: String,
     /// Chromatic adaptation for D65 mode: bradford (default) or cat02.
     #[arg(long, default_value = "bradford")]

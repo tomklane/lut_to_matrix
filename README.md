@@ -26,9 +26,9 @@ cargo run --release -p lutmatrix-cli -- inspect --json "path/to/My LUT.cube"
 (with confidence and reasons), and where 18% gray lands on the display.
 
 ```sh
-lutmatrix fit "My LUT.cube"                       # detected spaces, preserve LUT white
-lutmatrix fit --white d65 "My LUT.cube"           # D65 neutral (Bradford CAT + constraint)
-lutmatrix fit --lock-neutral "My LUT.cube"        # preserve mode, neutral exactly the LUT's
+lutmatrix fit "My LUT.cube"                       # detected spaces, D65 white (default)
+lutmatrix fit --white preserve "My LUT.cube"      # keep the LUT's white cast in the matrix
+lutmatrix fit --white preserve --lock-neutral "My LUT.cube"  # …with gray exactly the LUT's white
 lutmatrix fit --input arri_log_c3_awg3 --ei 1280 --gamut rec709 --transfer 2.4 "x.cube"
 lutmatrix fit --anchor display --mid-gray-nits 12.8 --bracket 0.5 "x.cube"
 lutmatrix fit --json "My LUT.cube"                # full analysis incl. per-sample swatches
