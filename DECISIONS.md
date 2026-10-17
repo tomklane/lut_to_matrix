@@ -225,4 +225,6 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   3×3 matrix can get, because the tonescale and hue/purity behaviour are fitted too.
 - Delivered as a modified DCTL with look presets 9–13 and a per-preset grey scale
   (`lg_scale`, so Display Grey Luminance 10 = the fitted grey); original presets are
-  bit-identical. Requires Tonescale Preset and Creative White = "USE LOOK PRESET".
+  bit-identical. The preset grey (lg_scale) applies only with Tonescale Preset = USE LOOK
+  PRESET (user decision): any stock tonescale preset gives every look the same exposure,
+  set by Display Grey Luminance, exactly as for the stock looks.
