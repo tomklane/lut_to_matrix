@@ -5,6 +5,7 @@
 //! front ends over it.
 
 pub mod math;
+pub mod detect;
 pub mod lut;
 pub mod spaces;
 

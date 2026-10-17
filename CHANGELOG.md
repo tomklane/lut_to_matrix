@@ -23,3 +23,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - LUT reading: `.cube` (1D, 3D, Resolve shaper+3D, DOMAIN_MIN/MAX, LUT_*_INPUT_RANGE,
   TITLE, comments) and `.3dl` (Lustre/Flame, 10–16-bit). Tetrahedral (default) and
   trilinear interpolation. `.cube` writer for synthetic LUTs.
+- Input/output space detection from filename, TITLE and comments with confidence
+  levels and reasons; ARRI EI and PQ peak from names; gray probe (where 18% gray
+  lands vs display middle gray); PQ inference from output range; diffuse-white hint
+  ("DW100") for display middle gray.
+- `lutmatrix inspect` CLI command (text or `--json`).

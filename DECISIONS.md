@@ -76,3 +76,16 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   diagonal). Trilinear is an option.
 - In a Resolve shaper+3D `.cube`, DOMAIN_MIN/MAX (or LUT_1D_INPUT_RANGE) belong to the
   shaper; the 3D table uses LUT_3D_INPUT_RANGE or [0, 1].
+
+## D12 — Detection
+- Evidence = weighted keywords (per camera space in the registry; per display gamut and
+  transfer in `detect.rs`) matched on lower-case, separator-free text from filename,
+  TITLE and comments. A keyword inside a longer matched keyword isn't counted twice.
+- Gray probe: each text-matched camera candidate's 18% gray is run through the LUT; up
+  to +1.5 evidence if it lands within 1.5 stops of display middle gray. With no text
+  evidence the probe alone picks a candidate and confidence is reported as "none".
+- Output never above 0.80 → +2 evidence for PQ; PQ peak from "1K"/"1000nits" in the
+  name, else estimated from the maximum output code and snapped to a preset.
+- ARRI's HDR LUTs are named "DW100" and place 18% gray at ≈13 nits (diffuse white at
+  100 nits), a stop below BT.2408's 26 nits. When "DW<n>" is in the name we suggest
+  display middle gray = n × 26/203.
