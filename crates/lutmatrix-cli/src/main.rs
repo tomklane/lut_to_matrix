@@ -19,6 +19,8 @@ struct Cli {
     cmd: Cmd,
 }
 
+// Parsed once at start-up; the size difference between variants is irrelevant.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Cmd {
     /// Parse LUT file(s) and report the detected input/output spaces.

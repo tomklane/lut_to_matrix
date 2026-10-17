@@ -36,6 +36,8 @@ app/                       Tauri v2 app (stage 4)
   a source comment, detection keywords, a fixture row and a round-trip test.
 - Ambiguous colour-science choices become settings, not hard-coded values; log them in
   `DECISIONS.md`.
+- Run `tools/check.sh` (clippy -D warnings + tests) before every commit; it exits
+  non-zero on any failure.
 - Small commits, one logical change each. Update `CHANGELOG.md` (Keep a Changelog) with
   every change. Run `cargo test` and `cargo clippy --all-targets -- -D warnings` before
   every commit; never commit with failures.
