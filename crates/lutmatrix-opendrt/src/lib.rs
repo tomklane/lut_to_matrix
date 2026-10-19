@@ -20,7 +20,7 @@ mod transform;
 pub mod writer;
 
 pub use params::{
-    Config, DisplayGamut, Eotf, InputGamut, InputOetf, Kind, LookParams, ParamInfo, Presets, ToneParams,
+    Config, ADDED_DISPLAY_ENCODINGS, DisplayGamut, Eotf, InputGamut, InputOetf, Kind, LookParams, ParamInfo, Presets, ToneParams,
 };
 pub use transform::OpenDrt;
 

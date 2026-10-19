@@ -6,7 +6,7 @@
 //! so every look shares the slider's exposure (user decision, DECISIONS.md D24).
 //! The stock presets are untouched.
 
-use crate::params::{Config, Kind, LookParams, Presets};
+use crate::params::{Config, Kind, LookParams, Presets, ADDED_DISPLAY_ENCODINGS};
 use crate::DCTL_SOURCE;
 
 /// One preset to add.
@@ -95,13 +95,16 @@ pub fn lut_match_dctl(presets: &[LutMatchPreset], note: &str) -> Result<String, 
     let combo2 = format!("DEFINE_UI_PARAMS(look_preset, Look Preset, DCTLUI_COMBO_BOX, 0, {{{ids2}}}, {{{names2}}})");
     src = replace_once(&src, &combo, &combo2, "look preset menu")?;
 
+    // Extra Display Encoding Presets, appended so the stock indices keep their meaning.
+    src = add_display_encodings(src)?;
+
     // Modification notice (GPLv3 §5a).
     let note = sanitize_comment(note);
     src = replace_once(
         &src,
         "  License: GPLv3\n  -------------------------------------------------*/",
         &format!(
-            "  License: GPLv3\n  -------------------------------------------------\n\n  MODIFIED by LUT Matrix {} (https://github.com/tomklane/lut_to_matrix): added\n  'LUT Match' look presets fitted to specific LUTs, and a per-preset Display Grey\n  Luminance scale (lg_scale), applied only with Tonescale Preset = USE LOOK PRESET.\n  Original presets unchanged. Distributed under GPLv3.{}\n  -------------------------------------------------*/",
+            "  License: GPLv3\n  -------------------------------------------------\n\n  MODIFIED by LUT Matrix {} (https://github.com/tomklane/lut_to_matrix): added\n  'LUT Match' look presets fitted to specific LUTs, a per-preset Display Grey\n  Luminance scale (lg_scale), applied only with Tonescale Preset = USE LOOK PRESET,\n  and a 'DCI - 2.6 Power / P3-D65' Display Encoding Preset.\n  Original presets unchanged. Distributed under GPLv3.{}\n  -------------------------------------------------*/",
             env!("CARGO_PKG_VERSION"),
             if note.is_empty() { String::new() } else { format!("\n  {note}") }
         ),
@@ -167,6 +170,33 @@ pub fn lut_match_dctl(presets: &[LutMatchPreset], note: &str) -> Result<String, 
     Ok(src)
 }
 
+/// Append [`ADDED_DISPLAY_ENCODINGS`] to the Display Encoding Preset menu, each with a
+/// branch after the last stock one setting surround, display gamut and EOTF.
+fn add_display_encodings(src: String) -> Result<String, WriteError> {
+    let n0 = crate::tables::DISPLAY_ENCODING_PRESET_LABELS.len();
+    let mut ids = String::new();
+    let mut labels = String::new();
+    let mut branches = String::new();
+    for (k, (gamut, eotf, surround, label)) in ADDED_DISPLAY_ENCODINGS.iter().enumerate() {
+        let i = n0 + k;
+        ids.push_str(&format!(", denc{i}"));
+        labels.push_str(&format!(", {label}"));
+        branches.push_str(&format!(
+            "  else if (display_encoding_preset=={i}) {{ // {label} (added by LUT Matrix)\n    tn_su = {surround};\n    display_gamut = {};\n    eotf = {};\n  }}\n",
+            gamut.index(),
+            eotf.index(),
+        ));
+    }
+    let last_label = crate::tables::DISPLAY_ENCODING_PRESET_LABELS[n0 - 1];
+    let mut src = replace_once(&src, "dolbypq}, {",&format!("dolbypq{ids}}}, {{"), "display encoding ids")?;
+    src = replace_once(&src, &format!("{last_label}}})"), &format!("{last_label}{labels}}})"), "display encoding labels")?;
+    let last = format!("  else if (display_encoding_preset=={}) {{", n0 - 1);
+    let b0 = src.find(&last).ok_or(WriteError::Source("last display encoding preset"))?;
+    let b1 = src[b0..].find("\n  }\n").ok_or(WriteError::Source("last display encoding preset"))? + b0 + "\n  }\n".len();
+    src.insert_str(b1, &branches);
+    Ok(src)
+}
+
 /// One-line, ASCII, no comment terminators.
 fn sanitize_comment(s: &str) -> String {
     let s: String = s.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { ' ' }).collect();
@@ -197,6 +227,12 @@ mod tests {
         assert!(d.contains("if (tonescale_preset!=0) lg_scale = 1.0f;"));
         // header, declaration, 2 presets, tonescale rule (comment + code), ts_y0, s_Lp100
         assert_eq!(d.matches("lg_scale").count(), 8);
+        // P3-D65 2.6 display encoding appended to the menu, with its branch.
+        assert!(d.contains("rec2100hlg, dolbypq, denc9}, {"));
+        assert!(d.contains("Dolby - PQ / P3-D65, DCI - 2.6 Power / P3-D65})"));
+        assert!(d.contains(
+            "  else if (display_encoding_preset==9) { // DCI - 2.6 Power / P3-D65 (added by LUT Matrix)\n    tn_su = 0;\n    display_gamut = 1;\n    eotf = 3;\n  }\n"
+        ));
         // Stock presets unchanged: removing the additions gives back the original text.
         assert!(d.contains(&DCTL_SOURCE[DCTL_SOURCE.find("if (look_preset==0)").unwrap()..DCTL_SOURCE.find("  else if (look_preset==8)").unwrap()]));
     }

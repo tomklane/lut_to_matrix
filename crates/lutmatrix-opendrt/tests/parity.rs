@@ -337,7 +337,7 @@ fn compare(name: &str, cfg: &Config, inputs: &[[f32; 3]], want: &[[f32; 3]], tol
 
 /// The DCTL written with two extra LUT Match presets: compiled, every stock look is
 /// unchanged and the new ones match the port (with `grey_scale` = `lg_scale` only for
-/// Tonescale Preset = USE LOOK PRESET).
+/// Tonescale Preset = USE LOOK PRESET); the added P3-D65 2.6 display encoding (9) too.
 #[test]
 fn lut_match_dctl_matches_port() {
     use lutmatrix_opendrt::writer::{lut_match_dctl, LutMatchPreset};
@@ -362,7 +362,7 @@ fn lut_match_dctl_matches_port() {
     let mut cases = Vec::new();
     for look in 0..11 {
         for tonescale in [0, 4, 11] {
-            for display_encoding in [0, 6] {
+            for display_encoding in [0, 6, 9] {
                 for slider in [10.0f32, 7.0] {
                     let p = Presets { look, tonescale, display_encoding, ..Presets::default() };
                     let mut case = if look < 9 {

@@ -162,8 +162,10 @@ fit is saved as a JSON file in your preset library (`lutmatrix opendrt presets p
 `build` writes the bundled OpenDRT v1.1.0.1 with the stock presets unchanged and your
 presets appended to the Look Preset menu. Each LUT Match preset carries its own
 middle-gray level, used only with *Tonescale Preset = USE LOOK PRESET*; with any stock
-tonescale every look has the exposure of the *Display Grey Luminance* slider. Install it
-like any DCTL; use DaVinci Wide Gamut / Intermediate in.
+tonescale every look has the exposure of the *Display Grey Luminance* slider. It also adds
+a *DCI - 2.6 Power / P3-D65* Display Encoding Preset (P3-D65 primaries and white, 2.6
+power, dark surround) at the end of that menu. Install it like any DCTL; use DaVinci
+Wide Gamut / Intermediate in.
 
 ### Export a DCTL
 

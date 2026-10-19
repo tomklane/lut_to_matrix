@@ -350,3 +350,16 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - No auto-updater: Tauri's updater needs its own signing key held as a repository secret
   and an update endpoint; not worth it yet for one user. Settings and presets live in the
   user data folder, so installing over an old version keeps them.
+
+## D32 — P3-D65 2.6 display encoding in built DCTLs (user request 2026-10-19)
+- Stock OpenDRT v1.1.0 offers 2.6 power only with P3-D60, P3-DCI and XYZ, and P3-D65
+  only with 2.2 or PQ. The transform already supports P3-D65 + 2.6 (the stickshift
+  `display_gamut`/`eotf` menus), so the writer adds a Display Encoding Preset
+  *DCI - 2.6 Power / P3-D65* (`display_gamut = 1`, `eotf = 3`, `tn_su = 0`), named in the
+  stock "standard - EOTF / gamut" pattern next to the other 2.6 presets.
+- Appended (index 9), never inserted: Resolve stores the combo index, so the stock
+  presets must keep theirs. Surround is dark, as for every preset in the user's DCTL (D27).
+- Always written, not a setting: it only adds a menu choice and changes nothing else.
+- The bundled DCTL stays unmodified; the port lists the addition separately
+  (`ADDED_DISPLAY_ENCODINGS`), and `lut_match_dctl_matches_port` compiles a built DCTL and
+  checks encoding 9 against the port.

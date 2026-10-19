@@ -153,7 +153,7 @@ enum OdrtCmd {
     #[command(subcommand)]
     Presets(PresetCmd),
     /// Write OpenDRT (the bundled v1.1.0.1 DCTL) with presets from your library added as
-    /// Look Presets.
+    /// Look Presets, plus a P3-D65 2.6 power Display Encoding Preset.
     Build {
         /// Presets to include, in menu order (default: all, oldest first).
         #[arg(long = "preset", value_name = "NAME")]

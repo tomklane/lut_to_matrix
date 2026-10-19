@@ -146,7 +146,8 @@ pub struct Presets {
     pub creative_white: usize,
     /// Creative White Limit (only used when `creative_white` ≠ 0).
     pub creative_white_limit: f32,
-    /// Display Encoding Preset combo index.
+    /// Display Encoding Preset combo index (9 and up exist only in DCTLs written by
+    /// [`crate::writer`]; see [`ADDED_DISPLAY_ENCODINGS`]).
     pub display_encoding: usize,
 }
 
@@ -171,6 +172,24 @@ const DISPLAY_ENCODINGS: [(DisplayGamut, Eotf, u8); 9] = [
     (DisplayGamut::P3D65, Eotf::Pq, 0),
 ];
 
+/// Display Encoding Presets that the DCTLs written by [`crate::writer`] add after the
+/// bundled ones (indices 9…): (display gamut, EOTF, surround, menu label). Not in the
+/// bundled DCTL itself.
+pub const ADDED_DISPLAY_ENCODINGS: [(DisplayGamut, Eotf, u8, &str); 1] = [
+    // 9: P3-D65 with a 2.6 power EOTF (D65 cinema projection), dark surround like the
+    // other 2.6 presets.
+    (DisplayGamut::P3D65, Eotf::Power26, 0, "DCI - 2.6 Power / P3-D65"),
+];
+
+/// (display gamut, EOTF, surround) for Display Encoding Preset `i`: the bundled ones, then
+/// [`ADDED_DISPLAY_ENCODINGS`].
+fn display_encoding(i: usize) -> Option<(DisplayGamut, Eotf, u8)> {
+    DISPLAY_ENCODINGS.get(i).copied().or_else(|| {
+        let (g, e, s, _) = *ADDED_DISPLAY_ENCODINGS.get(i.checked_sub(DISPLAY_ENCODINGS.len())?)?;
+        Some((g, e, s))
+    })
+}
+
 impl Config {
     /// Resolve the preset menus exactly like the DCTL (look, then tonescale override,
     /// creative white override, clamp on, display encoding). Input and sliders are the
@@ -193,7 +212,7 @@ impl Config {
             look.cwp_lm = p.creative_white_limit;
             look.cwp = (p.creative_white - 1) as f32;
         }
-        let (display_gamut, eotf, surround) = *DISPLAY_ENCODINGS.get(p.display_encoding)?;
+        let (display_gamut, eotf, surround) = display_encoding(p.display_encoding)?;
         Some(Config {
             in_gamut: InputGamut::DaVinciWideGamut,
             in_oetf: InputOetf::DaVinciIntermediate,
