@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
 ### Added
 - Built OpenDRT DCTLs (app *Build OpenDRT DCTL…* and `lutmatrix opendrt build`) have a
   *DCI - 2.6 Power / P3-D65* Display Encoding Preset (P3-D65, 2.6 power, dark surround),
