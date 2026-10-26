@@ -6,6 +6,13 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- OpenDRT Match, Neutralize gray: **White gain** mode balances the LUT's white (diffuse
+  white by default, or +3 / +5 stops) to D65 with one linear gain after the LUT, like a
+  Gain node, leaving the rest of the look relative to that white (DECISIONS D34). The
+  result shows the gain both in linear light and as a Gain-control setting. CLI:
+  `--neutral-gray white-gain [--white-stops 3]`.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

@@ -394,3 +394,24 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   1.90/0.32, 5207 2.37/1.04 → 2.25/0.52, 5201 v2 2.34/0.98 → 2.19/0.30, LogC4 5201
   2.19/3.94 → 2.27/3.01 (its gray error is mostly tone, not colour). The 5219 every-level
   fit exceeds the smoothness warning (0.35 vs 0.22 stock); at 50% it passes.
+
+## D34 — White gain mode (user request 2026-10-26)
+- A fourth Neutralize Gray mode, **White gain**: one per-channel gain in display-linear
+  light after the LUT, green held at 1, chosen so that the LUT's white becomes D65 (with
+  `neutral_amount`, part way in u′v′). It is what a colorist does with a Gain node after
+  the LUT. On a pure power display a linear gain g equals a signal gain g^(1/γ), so both
+  are reported; for PQ only the linear gain applies.
+- "White" is a gray level, default **diffuse white** (a 90% reflector, log2(0.9/0.18) =
+  +2.32 stops; the nearest measured ¼ stop at or below it is used, +2.25), settable
+  (app: diffuse white / +3 / +5; CLI `--white-stops`). If the LUT's input range ends
+  below it (linear-ACES LUTs end at +2.5), the brightest gray inside is used.
+- Unlike Middle gray / Every level (Bradford adaptations), the other levels keep the LUT's
+  cast *relative to* the white: on Ulook4b (yellow highlights, near-neutral mids) a white
+  balanced at +3 stops leaves mid gray b* −5.5 and shadows b* −1…−3, i.e. cool shadows
+  with neutral highlights. Balancing *before* the LUT (Offset in log, or linear gain in
+  camera RGB — the same for a log curve) was compared and rejected: Ulook4b's highlights
+  stay yellow whatever its input, and everything below the white goes strongly blue
+  (mid gray b* −18) with oranges pushed toward red. Offset *after* the LUT lifts and
+  tints the blacks.
+- Gain values equal an independent simulation (Ulook4b, +3 stops: R ×0.908, B ×1.344
+  linear = R 0.961, B 1.131 on the 2.4 signal).

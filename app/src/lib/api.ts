@@ -201,7 +201,17 @@ export interface AppInfo {
 }
 
 /** How the LUT's gray-axis cast is treated when matching OpenDRT (D33). */
-export type NeutralGray = "off" | "middle_gray" | "exposure";
+export type NeutralGray = "off" | "middle_gray" | "exposure" | "white_gain";
+/** Diffuse white (a 90% reflector), stops over 18% gray. */
+export const DIFFUSE_WHITE_STOPS = Math.log2(0.9 / 0.18);
+export interface WhiteGain {
+  stops: number;
+  duv: number;
+  /** Display-linear R, G, B gain (G = 1). */
+  linear: [number, number, number];
+  /** The same on the encoded signal (pure power displays only). */
+  signal: [number, number, number] | null;
+}
 export interface GrayPoint {
   stops: number;
   nits: number;
@@ -223,6 +233,7 @@ export interface MatchSettings {
   auto_freeze_brilliance: boolean;
   neutral_gray: NeutralGray;
   neutral_amount: number;
+  white_stops: number;
   threads: number;
 }
 export const defaultMatchSettings: MatchSettings = {
@@ -237,6 +248,7 @@ export const defaultMatchSettings: MatchSettings = {
   auto_freeze_brilliance: true,
   neutral_gray: "off",
   neutral_amount: 1,
+  white_stops: DIFFUSE_WHITE_STOPS,
   threads: 0,
 };
 export interface Score {
@@ -264,6 +276,7 @@ export interface OpenDrtMatch {
   gray_axis?: GrayPoint[];
   neutral_gray?: NeutralGray;
   neutral_amount?: number;
+  white_gain?: WhiteGain | null;
   safety: {
     finite_in_range: boolean;
     reversals: { colour: string; at_stops: number; drop_percent: number }[];

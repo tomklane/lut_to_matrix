@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { api, type GrayPoint } from "../lib/api";
+  import { api, DIFFUSE_WHITE_STOPS, type GrayPoint } from "../lib/api";
   import { app, cameraName, fmt, gamutLabel, metricLabel, transferLabel } from "../lib/state.svelte";
   import { confirmAsk } from "../lib/platform";
   import Segmented from "../lib/ui/Segmented.svelte";
@@ -105,7 +105,8 @@
   const grayWorst = $derived(grayVisible.length ? grayVisible.reduce((a, b) => (b.duv > a.duv ? b : a)) : null);
   const grayScale = $derived(Math.max(0.015, ...grayVisible.map((p) => p.duv)));
   const neutralOn = $derived(!!m && (m.neutral_gray ?? "off") !== "off");
-  const neutralLabel: Record<string, string> = { middle_gray: "middle gray", exposure: "every level" };
+  const neutralLabel: Record<string, string> = { middle_gray: "middle gray", exposure: "every level", white_gain: "white gain" };
+  const wg = $derived(m?.white_gain ?? null);
 
   const bars = $derived(
     m
@@ -188,10 +189,27 @@
               { value: "off", label: "Off", title: "Match the LUT as it is, cast included" },
               { value: "middle_gray", label: "Middle gray", title: "One white balance, taken from the LUT's 18% gray, for every colour" },
               { value: "exposure", label: "Every level", title: "White-balance each brightness level to the LUT's own gray there" },
+              { value: "white_gain", label: "White gain", title: "Balance the LUT's white with one gain after the LUT, like a Gain node; darker levels keep their look relative to it" },
             ]}
           />
         </div>
       </div>
+      {#if app.match.neutral_gray === "white_gain"}
+        <div class="row">
+          <div class="label">White at<div class="sub">The level made D65 by the gain</div></div>
+          <div class="value">
+            <Segmented
+              bind:value={app.match.white_stops}
+              label="White level"
+              options={[
+                { value: DIFFUSE_WHITE_STOPS, label: "Diffuse white", title: "A 90% white card, +2.3 stops over 18% gray" },
+                { value: 3, label: "+3 stops" },
+                { value: 5, label: "+5 stops" },
+              ]}
+            />
+          </div>
+        </div>
+      {/if}
       {#if app.match.neutral_gray !== "off"}
         <div class="row">
           <div class="label">Amount<div class="sub">Less than 100% keeps some of the cast</div></div>
@@ -254,7 +272,9 @@
         </div>
 
         {#if gray.length}
-          <div class="group-title">LUT gray axis — cast from D65{neutralOn ? " (removed before matching)" : ""}</div>
+          <div class="group-title">
+            LUT gray axis — cast from D65{neutralOn ? (m?.neutral_gray === "white_gain" ? " (white balanced with gain before matching)" : " (removed before matching)") : ""}
+          </div>
           <div class="card gray">
             <div class="strip" role="img" aria-label="Gray-axis cast by exposure">
               <div class="jnd" style="bottom:{(100 * VISIBLE_DUV) / grayScale}%" title="Δu′v′ {VISIBLE_DUV}: a clearly visible cast"></div>
@@ -276,6 +296,12 @@
               {/if}
               Faded bars are too dark to see (L* below {VISIBLE_L}).
             </div>
+            {#if wg}
+              <div class="sub num gain">
+                Gain after the LUT, white at {wg.stops >= 0 ? "+" : ""}{fmt(wg.stops, 2)} stops: linear R ×{fmt(wg.linear[0], 3)} · G ×1 · B ×{fmt(wg.linear[2], 3)}
+                {#if wg.signal}— on the display signal (a Gain control) R {fmt(wg.signal[0], 3)} · G 1 · B {fmt(wg.signal[2], 3)}{/if}
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -395,6 +421,9 @@
   }
   .gray {
     gap: 6px;
+  }
+  .gain {
+    color: var(--label);
   }
   .strip {
     position: relative;

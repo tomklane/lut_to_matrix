@@ -8,7 +8,7 @@ use lutmatrix_core::analysis::{analyze_with, Analysis, Reference, Severity};
 use lutmatrix_core::dctl;
 use lutmatrix_core::detect::{detect, Confidence, Detection, Guess};
 use lutmatrix_core::difference::Metric;
-use lutmatrix_core::gray_axis::NeutralGray;
+use lutmatrix_core::gray_axis::{NeutralGray, DIFFUSE_WHITE_STOPS};
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
 use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
@@ -63,6 +63,7 @@ enum NeutralArg {
     Off,
     MiddleGray,
     EveryLevel,
+    WhiteGain,
 }
 
 impl From<NeutralArg> for NeutralGray {
@@ -71,6 +72,7 @@ impl From<NeutralArg> for NeutralGray {
             NeutralArg::Off => NeutralGray::Off,
             NeutralArg::MiddleGray => NeutralGray::MiddleGray,
             NeutralArg::EveryLevel => NeutralGray::Exposure,
+            NeutralArg::WhiteGain => NeutralGray::WhiteGain,
         }
     }
 }
@@ -162,12 +164,17 @@ enum OdrtCmd {
         no_auto_freeze: bool,
         /// Remove the LUT's gray-axis cast before matching: "every-level" white-balances
         /// each luminance level to D65, "middle-gray" applies the 18% gray's balance to
-        /// everything.
+        /// everything, "white-gain" balances the LUT's white with one linear gain after the
+        /// LUT (like a Gain node; see --white-stops).
         #[arg(long, value_enum, default_value_t = NeutralArg::Off)]
         neutral_gray: NeutralArg,
         /// Strength of --neutral-gray, 0–1 (0.5 keeps half the cast).
         #[arg(long, default_value_t = 1.0)]
         neutral_amount: f64,
+        /// White for --neutral-gray white-gain, stops over 18% gray (default 2.32 = diffuse
+        /// white, a 90% reflector).
+        #[arg(long, default_value_t = DIFFUSE_WHITE_STOPS)]
+        white_stops: f64,
         /// Also write the full fit report to this file.
         #[arg(long, short)]
         out: Option<PathBuf>,
@@ -490,6 +497,7 @@ fn run_opendrt(args: OdrtArgs) -> Result<(), String> {
             no_auto_freeze,
             neutral_gray,
             neutral_amount,
+            white_stops,
             out,
             json,
         } => {
@@ -513,6 +521,7 @@ fn run_opendrt(args: OdrtArgs) -> Result<(), String> {
                 auto_freeze_brilliance: !no_auto_freeze,
                 neutral_gray: neutral_gray.into(),
                 neutral_amount,
+                white_stops,
                 ..MatchSettings::default()
             };
             let m = match_opendrt(&lut, lut.filename.clone(), input, output, &settings).map_err(|e| e.to_string())?;
