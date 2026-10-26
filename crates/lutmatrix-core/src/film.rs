@@ -150,6 +150,31 @@ pub fn negative_name(file_name: &str) -> Option<String> {
     })
 }
 
+/// Which stage a LUT is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Negative,
+    Print,
+}
+
+/// A guess from the file name: a print if the stock-names table knows it or the name
+/// mentions printing (film log in, a print stock number); otherwise a negative. The user
+/// can move a LUT to the other list.
+pub fn guess_stage(file_name: &str, names: &StockNames) -> Stage {
+    if names.print_name(file_name).is_some() {
+        return Stage::Print;
+    }
+    let squashed: String = file_name.to_ascii_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    const PRINT: [&str; 12] =
+        ["print", "filmlog", "cineon", "dlook", "2383", "2393", "2395", "3513", "3514", "3521", "3523", "cp30"];
+    if PRINT.iter().any(|k| squashed.contains(k)) && negative_name(file_name).is_none() {
+        Stage::Print
+    } else {
+        Stage::Negative
+    }
+}
+
 /// The stacked pair's name, `negative_print`.
 pub fn pair_name(negative: &str, print: &str) -> String {
     format!("{negative}_{print}")
@@ -191,6 +216,10 @@ mod tests {
         assert_eq!(negative_name("Eterna_8543.cube").as_deref(), Some("8543"));
         assert_eq!(negative_name("LogC4_to_Rec709.cube"), None, "no stock number");
         assert_eq!(pair_name("5201pull2", "2383v1_Native"), "5201pull2_2383v1_Native");
+        let n = names();
+        assert_eq!(guess_stage("AWG4LC4_to_5201_pull2.cube", &n), Stage::Negative);
+        assert_eq!(guess_stage("DLook4-N_gn_V2_Profile_To_Rec709.dat", &n), Stage::Print);
+        assert_eq!(guess_stage("FilmLog_to_Kodak2383_Rec709.cube", &n), Stage::Print);
     }
 
     #[test]

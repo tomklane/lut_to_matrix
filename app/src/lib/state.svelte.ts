@@ -5,8 +5,10 @@ import {
   api,
   defaultMatchSettings,
   defaultSettings,
+  onBatchPair,
   type Analysis,
   type AppInfo,
+  type BatchView,
   type Catalog,
   type InputSpace,
   type LoadedLut,
@@ -18,7 +20,7 @@ import {
 } from "./api";
 import { dirName } from "./platform";
 
-export type View = "matrix" | "opendrt" | "presets";
+export type View = "matrix" | "opendrt" | "batch" | "presets";
 
 export interface Through {
   path: string;
@@ -53,6 +55,12 @@ class AppState {
 
   presets = $state<PresetList | null>(null);
 
+  /** The batch (negatives × prints) as the backend has it. */
+  batch = $state<BatchView | null>(null);
+  /** The run in progress: pairs done / total, when it started, the latest pair. */
+  batchProgress = $state<{ done: number; total: number; started: number; last: string } | null>(null);
+  batchFitMismatched = $state(false);
+
   toast = $state<{ text: string; kind: "ok" | "error" } | null>(null);
   showAbout = $state(false);
   dragging = $state(false);
@@ -86,6 +94,34 @@ class AppState {
     }
   }
 
+  /** Load the batch and follow its progress events (once, at start-up). */
+  async initBatch() {
+    try {
+      this.batch = await api.batchState();
+    } catch (e) {
+      this.notify(String(e), "error");
+    }
+    await onBatchPair((p) => {
+      if (this.batch) this.batch.results = [...this.batch.results.filter((r) => r.name !== p.pair.name), p.pair];
+      if (this.batchProgress) this.batchProgress = { ...this.batchProgress, done: p.done, total: p.total, last: p.pair.name };
+    });
+  }
+
+  async addToBatch(paths: string[], stage: "negative" | "print" | null = null) {
+    const luts = paths.filter((p) => /\.(cube|3dl|dat)$/i.test(p));
+    if (!luts.length) {
+      this.notify("Drop .cube, .3dl or .dat LUTs", "error");
+      return;
+    }
+    try {
+      this.batch = await api.batchAdd(luts, stage);
+      this.lastDir = dirName(luts[0]);
+    } catch (e) {
+      this.notify(String(e), "error");
+      this.batch = await api.batchState();
+    }
+  }
+
   async refreshPresets() {
     try {
       this.presets = await api.presetsList();
@@ -109,7 +145,7 @@ class AppState {
   applyPrefs(p: unknown) {
     if (!p || typeof p !== "object") return;
     const prefs = p as Record<string, unknown>;
-    if (prefs.view === "matrix" || prefs.view === "opendrt" || prefs.view === "presets") this.view = prefs.view;
+    if (["matrix", "opendrt", "batch", "presets"].includes(prefs.view as string)) this.view = prefs.view as View;
     if (prefs.settings && typeof prefs.settings === "object")
       this.settings = { ...structuredClone(defaultSettings), ...(prefs.settings as Partial<Settings>) };
     if (prefs.match && typeof prefs.match === "object")

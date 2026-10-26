@@ -15,6 +15,13 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   film stocks: the negative's stock number and pull/push from its file name, the print's
   from your `stock-names.json`.
 - `.dat` LUTs (headerless tables, blue fastest) can be opened.
+- App: **Batch** section. Drop or add negative and print LUTs (each goes to the list its
+  name suggests; move or rename any), tick prints by variant, edit the stock-names table,
+  check the pairs or match them all with the OpenDRT Match settings, with progress and
+  Stop. Results are sortable (fitted error, gray axis, stock error, grey level, checks),
+  expand to show the pair check and fit notes, save to the library in one go, and export
+  as CSV. Each run is also written to `batches/` in the data folder and reloaded next
+  time the app opens.
 - OpenDRT Match, Neutralize gray: **White gain** mode balances the LUT's white (diffuse
   white by default, or +3 / +5 stops) to D65 with one linear gain after the LUT, like a
   Gain node, leaving the rest of the look relative to that white (DECISIONS D34). The

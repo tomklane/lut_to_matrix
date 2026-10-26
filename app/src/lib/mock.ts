@@ -103,7 +103,53 @@ export async function mockInvoke(cmd: string, args: Record<string, any> = {}): P
     case "preset_rename":
       presets = presets.map((p) => (p.name === args.name ? { ...p, name: args.newName } : p));
       return args.newName;
+    case "batch_state":
+    case "batch_add":
+    case "batch_remove":
+    case "stock_names_set":
+      return batchView();
+    case "batch_update": {
+      const b = await batchFx();
+      for (const u of (args?.updates ?? []) as Record<string, unknown>[]) {
+        const i = b.items.find((x: { id: number }) => x.id === u.id);
+        if (i) Object.assign(i, Object.fromEntries(Object.entries(u).filter(([k, v]) => k !== "id" && v !== undefined)));
+      }
+      return batchView();
+    }
+    case "stock_names_get":
+    case "stock_names_import":
+      return (await batchFx()).names;
+    case "batch_run": {
+      const b = await batchFx();
+      const all = structuredClone(b.all_results);
+      const total = all.length;
+      for (let k = 0; k < total; k++) {
+        await sleep(700);
+        window.dispatchEvent(new CustomEvent("batch-pair", { detail: { done: k + 1, total, pair: all[k] } }));
+      }
+      b.results = all;
+      return batchView();
+    }
+    case "batch_existing":
+      return [];
+    case "batch_save":
+      return args?.names ?? [];
+    case "batch_cancel":
+    case "batch_export_csv":
+      return null;
     default:
       return null;
   }
+}
+
+/* ---------- batch (dev fixture app/dev-fixtures/batch.json) ---------- */
+
+let batchData: any = null;
+async function batchFx(): Promise<any> {
+  batchData ??= await fx("batch.json");
+  return batchData;
+}
+async function batchView(): Promise<unknown> {
+  const b = await batchFx();
+  return { items: b.items, results: b.results, running: false, folder: b.folder, names_path: b.names_path };
 }
