@@ -149,6 +149,18 @@ lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl            # OpenDRT + every pr
 lutmatrix opendrt build --preset "LUT Match K1S1" -o K1S1.dctl
 ```
 
+### Batch: every negative × every print
+
+```sh
+lutmatrix batch --negative negs/*.cube --print prints/*.dat --check-only   # names and pair checks only
+lutmatrix batch --negative negs/*.cube --print prints/*.dat --neutral-gray white-gain --save
+```
+
+Each pair is the negative LUT followed by the print LUT. Names come from film stocks:
+the negative's stock number and pull/push from its file name, the print's from
+`stock-names.json` in your data folder (`{"looks": {"DLook4": "2383v1"}, "variants":
+{"N": "D60"}, "flags": {"gn": "Neutralized"}}`).
+
 `fit` adjusts every OpenDRT v1.1.0 look parameter and the Display Grey Luminance so that
 OpenDRT (DaVinci Wide Gamut / Intermediate in, the LUT's display out) reproduces the LUT.
 The report compares the stock Standard look, the best unmodified preset and the fit, and

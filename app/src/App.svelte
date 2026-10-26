@@ -33,9 +33,9 @@
     app.refreshPresets();
     listenForDrops(
       (paths) => {
-        const lut = paths.find((p) => /\.(cube|3dl)$/i.test(p));
+        const lut = paths.find((p) => /\.(cube|3dl|dat)$/i.test(p));
         if (lut) app.openLut(lut);
-        else app.notify("Drop a .cube or .3dl LUT", "error");
+        else app.notify("Drop a .cube, .3dl or .dat LUT", "error");
       },
       (over) => (app.dragging = over),
     );

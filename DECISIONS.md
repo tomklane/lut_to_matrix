@@ -427,3 +427,29 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - "1" is the encoded signal's top (`decode_channel(1.0)`: 100 nits for the SDR outputs,
   10 000 for PQ). Reported as the factor and in stops; the app says when none was needed.
 - Ulook4b needs none: red reaches 1.0 but gets a gain below 1; blue peaks at 0.78 → 0.90.
+
+## D36 — Negative × print batches (user request 2026-10-26)
+- The user's film LUTs come in two stages: *negative* LUTs (camera log → film negative,
+  Cineon printing density) and *print* LUTs (negative → display). They want every
+  negative × every print matched to OpenDRT. A `film::Stack` runs a negative then a print
+  exactly as two LUT nodes in Resolve (each stage evaluated and clamped to its own
+  range, no resampling into a new cube), so the matcher, gray axis and safety checks treat
+  a pair as one LUT. Its input space is the negative's camera space, its output the print's
+  display.
+- **Pair check** before fitting: 18% scene gray through the stack must land at 3–40% of
+  the display peak (typical film pairs: ~10%), and at most 5% of realistic colours (gray
+  −8…+8 stops; hues inside camera ∩ display gamut at −4…+6 stops) may leave the print's
+  input range. Colours beyond the display gamut are left out: the user's 5201 negative
+  sends ~14% of camera-gamut colours below 0, which the print clips, as Resolve does.
+  Failing pairs are skipped unless `fit_mismatched`.
+- **Names** use film stocks only: `negative_print`. The negative: the camera stock number
+  in its file name (Kodak 50xx/52xx/72xx/73xx, Fuji 85xx/86xx) plus pull/push
+  (`5201pull2`). The print: the user's `stock-names.json` (data folder) maps look codes
+  and profile variants to words (`DLook4-N_gn_V2` → `2383v1_D60_Neutralized_V2`). That
+  table describes the user's LUT pack, so like presets (D29) it is not in the repo.
+  Unmatched files keep their file name. Two pairs with one name stop the batch.
+- `.dat` LUTs (headerless N³ float triples, blue fastest — the user's print LUTs) are read
+  as `.3dl`.
+- First real run (5201 pull 2 negative × DLook prints, Rec.709 2.4): 18% gray lands at
+  11–15 nits for every print, confirming `AWG4LC4_to_5201_pull2` is a negative and the
+  DLooks take Cineon film log. About 6 s per pair; fitted ΔE2000 2.1–3.8.

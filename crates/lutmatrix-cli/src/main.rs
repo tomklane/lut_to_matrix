@@ -47,6 +47,10 @@ enum Cmd {
     /// Match OpenDRT to LUTs, keep the results in your local preset library, and build
     /// OpenDRT DCTLs with them as "LUT Match" look presets.
     Opendrt(OdrtArgs),
+    /// Stack every negative LUT with every print LUT and match OpenDRT to each pair.
+    /// Pairs are named `negative_print` from film stocks: the negative's stock number
+    /// (+ pull/push) from its file name, the print's from your stock-names table.
+    Batch(BatchArgs),
     /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
     Fit {
         file: PathBuf,
@@ -119,6 +123,65 @@ impl SpaceOpts {
         }
         Ok((input, output, d))
     }
+}
+
+#[derive(Args)]
+struct BatchArgs {
+    /// Negative LUTs (camera log → film negative).
+    #[arg(long = "negative", short = 'n', required = true, num_args = 1..)]
+    negatives: Vec<PathBuf>,
+    /// Print LUTs (film negative → display).
+    #[arg(long = "print", short = 'p', required = true, num_args = 1..)]
+    prints: Vec<PathBuf>,
+    /// Stock-names table (default: stock-names.json in your data folder).
+    #[arg(long)]
+    names: Option<PathBuf>,
+    /// Override the negatives' camera space, e.g. arri_log_c4_awg4 (default: detected).
+    #[arg(long)]
+    input: Option<String>,
+    /// ARRI LogC3 exposure index for the negatives.
+    #[arg(long)]
+    ei: Option<u16>,
+    /// Override the prints' display gamut: rec709, p3_d65, p3_dci, rec2020.
+    #[arg(long)]
+    gamut: Option<String>,
+    /// Override the prints' display transfer: 2.2, 2.4, 2.6 or pq.
+    #[arg(long)]
+    transfer: Option<String>,
+    /// Only name and check the pairs (no fitting).
+    #[arg(long)]
+    check_only: bool,
+    /// Fit pairs whose check failed too (default: skip them).
+    #[arg(long)]
+    fit_mismatched: bool,
+    /// quick, standard or thorough.
+    #[arg(long, default_value = "standard")]
+    effort: String,
+    /// See `opendrt fit --neutral-gray`.
+    #[arg(long, value_enum, default_value_t = NeutralArg::Off)]
+    neutral_gray: NeutralArg,
+    #[arg(long, default_value_t = 1.0)]
+    neutral_amount: f64,
+    #[arg(long, default_value_t = DIFFUSE_WHITE_STOPS)]
+    white_stops: f64,
+    /// Keep brilliance at the start preset.
+    #[arg(long)]
+    freeze_brilliance: bool,
+    /// Pull towards the start preset (0 = off).
+    #[arg(long, default_value_t = 0.0)]
+    reg: f64,
+    /// Folder for batch.csv and one JSON report per pair.
+    #[arg(long, short, default_value = "lutmatrix-batch")]
+    out: PathBuf,
+    /// Save every fitted pair to your preset library (named like the pair).
+    #[arg(long)]
+    save: bool,
+    /// With --save: replace presets of the same name.
+    #[arg(long)]
+    replace: bool,
+    /// Preset library folder (default: your per-user app data folder).
+    #[arg(long)]
+    store: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -478,6 +541,130 @@ fn short_cast(c: &str) -> &'static str {
     }
 }
 
+fn run_batch(a: BatchArgs) -> Result<(), String> {
+    use lutmatrix_core::batch::{self, BatchOptions, Negative, Print};
+    use lutmatrix_core::film::{negative_name, StockNames};
+    use std::sync::atomic::AtomicBool;
+
+    let names_path = a.names.clone().or_else(StockNames::default_path);
+    let names = match &names_path {
+        Some(p) => StockNames::load(p)?,
+        None => StockNames::default(),
+    };
+    let spaces = SpaceOpts { input: a.input.clone(), ei: a.ei, gamut: a.gamut.clone(), transfer: a.transfer.clone(), peak: None };
+    let stem = |p: &PathBuf| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let file = |p: &PathBuf| p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut negatives = Vec::new();
+    for p in &a.negatives {
+        let lut = Lut::load(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let (input, _, _) = spaces.resolve(&lut)?;
+        let name = negative_name(&file(p)).unwrap_or_else(|| {
+            eprintln!("note: no stock number in {}; using the file name", file(p));
+            stem(p)
+        });
+        negatives.push(Negative { name, file: file(p), lut, input });
+    }
+    let mut prints = Vec::new();
+    for p in &a.prints {
+        let lut = Lut::load(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let (_, output, _) = spaces.resolve(&lut)?;
+        let name = names.print_name(&file(p)).map(|n| n.name).unwrap_or_else(|| {
+            eprintln!("note: {} matches no look in the stock-names table; using the file name", file(p));
+            stem(p)
+        });
+        prints.push(Print { name, file: file(p), lut, output });
+    }
+    let mut seen = std::collections::BTreeMap::new();
+    for n in &negatives {
+        for p in &prints {
+            if let Some(prev) = seen.insert(batch_pair(&n.name, &p.name), (&n.file, &p.file)) {
+                return Err(format!(
+                    "two pairs would both be called '{}' ({} + {}, and {} + {}); rename one in the stock-names table",
+                    batch_pair(&n.name, &p.name), prev.0, prev.1, n.file, p.file
+                ));
+            }
+        }
+    }
+    let (iterations, starts) = match a.effort.as_str() {
+        "quick" => (40, 2),
+        "standard" => (150, 3),
+        "thorough" => (300, 4),
+        e => return Err(format!("--effort must be quick, standard or thorough (got '{e}')")),
+    };
+    let settings = MatchSettings {
+        max_iterations: iterations,
+        starts,
+        regularization: a.reg,
+        freeze: if a.freeze_brilliance { vec!["brl".into()] } else { Vec::new() },
+        auto_freeze_brilliance: !a.freeze_brilliance,
+        neutral_gray: a.neutral_gray.into(),
+        neutral_amount: a.neutral_amount,
+        white_stops: a.white_stops,
+        ..MatchSettings::default()
+    };
+    let store = if a.save {
+        Some(match &a.store {
+            Some(d) => PresetStore::at(d),
+            None => PresetStore::open_default().map_err(|e| e.to_string())?,
+        })
+    } else {
+        None
+    };
+    std::fs::create_dir_all(&a.out).map_err(|e| format!("{}: {e}", a.out.display()))?;
+    let opts = BatchOptions { settings, fit_mismatched: a.fit_mismatched, check_only: a.check_only };
+    println!(
+        "{} negative(s) × {} print(s) = {} pairs{}",
+        negatives.len(),
+        prints.len(),
+        negatives.len() * prints.len(),
+        if a.check_only { " (check only)" } else { "" }
+    );
+    let cancel = AtomicBool::new(false);
+    let out = a.out.clone();
+    let mut write_err = None;
+    let results = batch::run(&negatives, &prints, &opts, &cancel, |done, total, r| {
+        let what = match (&r.result, &r.error) {
+            (Some(m), _) => format!(
+                "{} {:.2} → {:.2} (gray {:.2}), grey {:.2} nits{}",
+                m.metric.label(),
+                m.stock.mean,
+                m.fitted.mean,
+                m.fitted.gray_mean,
+                m.config.grey_nits,
+                if m.safety.ok() { "" } else { ", CHECK safety" }
+            ),
+            (None, Some(e)) => e.clone(),
+            (None, None) => format!(
+                "18% gray → {:.2} nits{}",
+                r.check.gray_nits,
+                if r.check.ok { String::new() } else { format!("  MISMATCH: {}", r.check.problems.join("; ")) }
+            ),
+        };
+        println!("[{done}/{total}] {:<44} {what}", r.name);
+        let path = out.join(format!("{}.json", r.name.replace(['/', '\\', ':'], "-")));
+        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(r).unwrap() + "\n") {
+            write_err.get_or_insert(format!("{}: {e}", path.display()));
+        }
+        if let (Some(store), Some(m)) = (&store, &r.result) {
+            match StoredPreset::from_match(m, Some(&r.name)).map_err(|e| e.to_string()).and_then(|p| store.save(&p, a.replace).map_err(|e| e.to_string())) {
+                Ok(_) => {}
+                Err(e) => eprintln!("  not saved: {e}"),
+            }
+        }
+    });
+    if let Some(e) = write_err {
+        return Err(e);
+    }
+    let csv_path = a.out.join("batch.csv");
+    std::fs::write(&csv_path, batch::csv(&results)).map_err(|e| format!("{}: {e}", csv_path.display()))?;
+    println!("wrote {} and {} pair report(s) to {}", csv_path.display(), results.len(), a.out.display());
+    Ok(())
+}
+
+fn batch_pair(n: &str, p: &str) -> String {
+    lutmatrix_core::film::pair_name(n, p)
+}
+
 fn run_opendrt(args: OdrtArgs) -> Result<(), String> {
     let store = match args.store {
         Some(d) => PresetStore::at(d),
@@ -741,6 +928,13 @@ fn main() -> ExitCode {
             println!("{}", meta.fit_error);
             ExitCode::SUCCESS
         }
+        Cmd::Batch(args) => match run_batch(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Cmd::Opendrt(args) => match run_opendrt(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

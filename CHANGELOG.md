@@ -7,6 +7,14 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Negative × print batches (DECISIONS D36): `lutmatrix batch --negative … --print …`
+  stacks every negative LUT with every print LUT (as two LUT nodes in Resolve), checks
+  each pairing (where 18% gray lands, clipping between the stages), matches OpenDRT to
+  each pair with the usual settings, and writes `batch.csv` plus a report per pair;
+  `--save` puts the fits in your preset library. Pairs are named `negative_print` from
+  film stocks: the negative's stock number and pull/push from its file name, the print's
+  from your `stock-names.json`.
+- `.dat` LUTs (headerless tables, blue fastest) can be opened.
 - OpenDRT Match, Neutralize gray: **White gain** mode balances the LUT's white (diffuse
   white by default, or +3 / +5 stops) to D65 with one linear gain after the LUT, like a
   Gain node, leaving the rest of the look relative to that white (DECISIONS D34). The

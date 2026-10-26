@@ -5,9 +5,11 @@
 //! front ends over it.
 
 pub mod analysis;
+pub mod batch;
 pub mod dctl;
 pub mod detect;
 pub mod difference;
+pub mod film;
 pub mod fit;
 pub mod gray_axis;
 pub mod lut;
