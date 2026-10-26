@@ -142,6 +142,7 @@ own output).
 ```sh
 lutmatrix opendrt fit --name "LUT Match K1S1" "K1S1.cube"   # fit and save to your preset library
 lutmatrix opendrt fit --input arri_log_c3_awg3 --freeze brl "x.cube"
+lutmatrix opendrt fit --neutral-gray every-level "print.cube"   # remove the LUT's gray cast first
 lutmatrix opendrt presets list                               # also: show, remove, import, export, path
 lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl            # OpenDRT + every preset in your library
 lutmatrix opendrt build --preset "LUT Match K1S1" -o K1S1.dctl

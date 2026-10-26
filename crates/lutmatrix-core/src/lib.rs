@@ -9,6 +9,7 @@ pub mod dctl;
 pub mod detect;
 pub mod difference;
 pub mod fit;
+pub mod gray_axis;
 pub mod lut;
 pub mod math;
 pub mod opendrt_match;

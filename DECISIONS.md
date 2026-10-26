@@ -350,3 +350,34 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - No auto-updater: Tauri's updater needs its own signing key held as a repository secret
   and an update endpoint; not worth it yet for one user. Settings and presets live in the
   user data folder, so installing over an old version keeps them.
+
+## D33 — Neutralize Gray for OpenDRT matching (user request 2026-10-26)
+- Several of the user's LUTs (the 2393 print emulations, the LogC4 5201) render scene
+  neutrals off D65, and differently by level: e.g. 5219 pull 2 goes from red-orange in
+  the shadows (Δu′v′ 0.009) to yellow-green at and above middle gray (0.012–0.014, b* up
+  to +6). OpenDRT's gray is D65 at every level (creative white D65), so a match against
+  the cast spends look parameters (creative white D60/D75, hue shifts) approximating a
+  cast it cannot make, at the expense of the other colours.
+- Setting `MatchSettings.neutral_gray` (default **Off**, so existing fits are unchanged):
+  - **Every level** (`exposure`): each LUT output colour is adapted (Bradford, full) from
+    the LUT's own gray *at the same output luminance* to D65. The gray axis is measured at
+    ¼ stops over the LUT's input range and interpolated in log luminance (ends held). It
+    depends only on the LUT's output, so it is a real display-referred correction (what a
+    luminance-keyed balance node after the LUT would do); grays land exactly on D65 with
+    their luminance unchanged. Chosen over scene-exposure keying, which would make the
+    correction depend on the input as well.
+  - **Middle gray**: one Bradford adaptation from the LUT's 18% gray for every colour (a
+    plain white balance); other levels keep their remaining cast.
+  - `neutral_amount` 0–1 moves the target white only part way to D65 (keeps some cast).
+  - Corrected colours are clipped to the display gamut and peak, which OpenDRT cannot
+    exceed either.
+- Only the fit targets change: the preset is ordinary OpenDRT parameters and the DCTL
+  writer is unaffected. Scores are against the corrected LUT; the report keeps the measured
+  (uncorrected) gray axis at whole stops, the mode and the amount, and every score now has
+  a gray-ramp-only mean.
+- Casts are reported (a note) when Δu′v′ > 0.005 at L* ≥ 10; darker levels are ignored
+  because a cast there is not visible.
+- Results (training mean ΔE2000 / gray-ramp mean, off → every level): 5219 v2 2.08/1.36 →
+  1.90/0.32, 5207 2.37/1.04 → 2.25/0.52, 5201 v2 2.34/0.98 → 2.19/0.30, LogC4 5201
+  2.19/3.94 → 2.27/3.01 (its gray error is mostly tone, not colour). The 5219 every-level
+  fit exceeds the smoothness warning (0.35 vs 0.22 stock); at 50% it passes.

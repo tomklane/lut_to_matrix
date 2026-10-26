@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { api } from "../lib/api";
+  import { api, type GrayPoint } from "../lib/api";
   import { app, cameraName, fmt, gamutLabel, metricLabel, transferLabel } from "../lib/state.svelte";
   import { confirmAsk } from "../lib/platform";
   import Segmented from "../lib/ui/Segmented.svelte";
@@ -79,12 +79,46 @@
     }
   }
 
+  // Gray axis (D33): the LUT's cast from D65 per stop, as measured before correction.
+  const VISIBLE_L = 10;
+  const VISIBLE_DUV = 0.005;
+  function castName(p: GrayPoint): string {
+    if (p.duv < 0.0015) return "neutral";
+    const h = ((Math.atan2(p.b, p.a) * 180) / Math.PI + 360) % 360;
+    if (h >= 20 && h < 70) return "red-orange";
+    if (h >= 70 && h < 105) return "yellow";
+    if (h >= 105 && h < 150) return "yellow-green";
+    if (h >= 150 && h < 200) return "green";
+    if (h >= 200 && h < 250) return "cyan";
+    if (h >= 250 && h < 300) return "blue";
+    if (h >= 300 && h < 340) return "magenta";
+    return "red-magenta";
+  }
+  // The cast's hue at a fixed lightness, chroma exaggerated so it reads at a glance.
+  function castColour(p: GrayPoint): string {
+    const c = Math.hypot(p.a, p.b);
+    if (p.duv < 0.0015 || c < 1e-6) return "var(--label-3)";
+    return `lab(62% ${(45 * p.a) / c} ${(45 * p.b) / c})`;
+  }
+  const gray = $derived(m?.gray_axis ?? []);
+  const grayVisible = $derived(gray.filter((p) => p.l >= VISIBLE_L));
+  const grayWorst = $derived(grayVisible.length ? grayVisible.reduce((a, b) => (b.duv > a.duv ? b : a)) : null);
+  const grayScale = $derived(Math.max(0.015, ...grayVisible.map((p) => p.duv)));
+  const neutralOn = $derived(!!m && (m.neutral_gray ?? "off") !== "off");
+  const neutralLabel: Record<string, string> = { middle_gray: "middle gray", exposure: "every level" };
+
   const bars = $derived(
     m
       ? [
           { label: "Stock OpenDRT", sub: "Standard look, ACES-2.0 tonescale, 10 nits grey", s: m.stock },
           { label: "Best preset", sub: m.start.description, s: m.best_preset },
-          { label: "Fitted", sub: `grey ${fmt(m.config.grey_nits)} nits${m.frozen.length ? ` · frozen: ${m.frozen.join(", ")}` : ""}`, s: m.fitted },
+          {
+            label: "Fitted",
+            sub: `grey ${fmt(m.config.grey_nits)} nits${m.frozen.length ? ` · frozen: ${m.frozen.join(", ")}` : ""}${
+              neutralOn ? ` · neutral gray (${neutralLabel[m.neutral_gray!]}, ${Math.round(100 * (m.neutral_amount ?? 1))}%)` : ""
+            }`,
+            s: m.fitted,
+          },
         ]
       : [],
   );
@@ -143,6 +177,38 @@
         </div>
       </div>
       <div class="row">
+        <div class="label">
+          Neutralize gray<div class="sub">Remove the LUT's gray-axis cast before matching (OpenDRT's gray is always neutral)</div>
+        </div>
+        <div class="value">
+          <Segmented
+            bind:value={app.match.neutral_gray}
+            label="Neutralize gray"
+            options={[
+              { value: "off", label: "Off", title: "Match the LUT as it is, cast included" },
+              { value: "middle_gray", label: "Middle gray", title: "One white balance, taken from the LUT's 18% gray, for every colour" },
+              { value: "exposure", label: "Every level", title: "White-balance each brightness level to the LUT's own gray there" },
+            ]}
+          />
+        </div>
+      </div>
+      {#if app.match.neutral_gray !== "off"}
+        <div class="row">
+          <div class="label">Amount<div class="sub">Less than 100% keeps some of the cast</div></div>
+          <div class="value">
+            <Segmented
+              bind:value={app.match.neutral_amount}
+              label="Neutralize amount"
+              options={[
+                { value: 0.5, label: "50%" },
+                { value: 0.75, label: "75%" },
+                { value: 1, label: "100%" },
+              ]}
+            />
+          </div>
+        </div>
+      {/if}
+      <div class="row">
         <div class="label">Effort</div>
         <div class="value">
           <Segmented
@@ -179,10 +245,39 @@
                 <div class="sub muted">{b.sub}</div>
               </div>
               <div class="track"><div class="fill" class:best={b.label === "Fitted"} style="width:{(100 * b.s.mean) / scale}%"></div></div>
-              <div class="bv num"><b>{fmt(b.s.mean)}</b> <span class="faint">p95 {fmt(b.s.p95)} · max {fmt(b.s.max)}</span></div>
+              <div class="bv num">
+                <b>{fmt(b.s.mean)}</b> <span class="faint">p95 {fmt(b.s.p95)} · max {fmt(b.s.max)}</span>
+                {#if b.s.gray_mean !== undefined}<div class="faint">gray axis {fmt(b.s.gray_mean)}</div>{/if}
+              </div>
             </div>
           {/each}
         </div>
+
+        {#if gray.length}
+          <div class="group-title">LUT gray axis — cast from D65{neutralOn ? " (removed before matching)" : ""}</div>
+          <div class="card gray">
+            <div class="strip" role="img" aria-label="Gray-axis cast by exposure">
+              <div class="jnd" style="bottom:{(100 * VISIBLE_DUV) / grayScale}%" title="Δu′v′ {VISIBLE_DUV}: a clearly visible cast"></div>
+              {#each gray as p (p.stops)}
+                <div class="col" class:dim={p.l < VISIBLE_L} title="{p.stops >= 0 ? '+' : ''}{p.stops} stops · {fmt(p.nits, 2)} nits · Δu′v′ {fmt(p.duv, 4)} · {castName(p)}">
+                  <div class="g" style="height:{Math.min(100, (100 * p.duv) / grayScale)}%; background:{castColour(p)}"></div>
+                </div>
+              {/each}
+            </div>
+            <div class="axis num faint">
+              {#each gray as p (p.stops)}<span>{p.stops >= 0 ? "+" : ""}{p.stops}</span>{/each}
+            </div>
+            <div class="sub muted">
+              {#if grayWorst && grayWorst.duv > VISIBLE_DUV}
+                Largest visible cast Δu′v′ {fmt(grayWorst.duv, 4)}, {castName(grayWorst)}, at {grayWorst.stops >= 0 ? "+" : ""}{grayWorst.stops} stops.
+                {#if !neutralOn}Neutralize gray removes it before matching.{/if}
+              {:else}
+                Neutral to within Δu′v′ {fmt(grayWorst?.duv ?? 0, 4)}.
+              {/if}
+              Faded bars are too dark to see (L* below {VISIBLE_L}).
+            </div>
+          </div>
+        {/if}
 
         <div class="group-title">Safety checks</div>
         <div class="group">
@@ -298,6 +393,47 @@
   .bv b {
     font-size: 15px;
   }
+  .gray {
+    gap: 6px;
+  }
+  .strip {
+    position: relative;
+    height: 64px;
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    border-bottom: 1px solid var(--separator);
+  }
+  .strip .col {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+  }
+  .strip .col.dim {
+    opacity: 0.3;
+  }
+  .strip .g {
+    width: 100%;
+    min-height: 2px;
+    border-radius: 3px 3px 0 0;
+  }
+  .jnd {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px dashed color-mix(in srgb, var(--label) 30%, transparent);
+    pointer-events: none;
+  }
+  .axis {
+    display: flex;
+    gap: 3px;
+    font-size: 10.5px;
+  }
+  .axis span {
+    flex: 1;
+    text-align: center;
+  }
   .row > :global(svg) {
     flex: none;
     color: var(--green);
@@ -310,6 +446,10 @@
   }
   .row .label {
     min-width: 0;
+  }
+  .row.note .label {
+    flex: 1;
+    white-space: normal;
   }
   input[type="text"] {
     width: 260px;

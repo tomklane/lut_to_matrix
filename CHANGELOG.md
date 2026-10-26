@@ -6,6 +6,15 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- OpenDRT Match: **Neutralize gray** (Off / Middle gray / Every level, with an amount)
+  removes the LUT's gray-axis cast before matching, since OpenDRT's gray is always
+  neutral (DECISIONS D33). CLI: `lutmatrix opendrt fit --neutral-gray every-level
+  [--neutral-amount 0.75]`.
+- OpenDRT Match reports the LUT's gray axis (cast from D65 at each stop, with its
+  direction), notes a visible cast, and shows a gray-axis-only error for each score. The
+  app draws the cast per stop.
+
 ## [0.1.0] - 2026-10-17
 
 ### Changed
