@@ -100,10 +100,18 @@
     if (p.duv < 0.0015 || c < 1e-6) return "var(--label-3)";
     return `lab(62% ${(45 * p.a) / c} ${(45 * p.b) / c})`;
   }
-  const gray = $derived(m?.gray_axis ?? []);
+  type GrayView = "lut" | "corrected";
+  let grayView = $state<GrayView>("corrected");
+  const hasCorrected = $derived((m?.gray_axis_corrected?.length ?? 0) > 0);
+  const showCorrected = $derived(hasCorrected && grayView === "corrected");
+  const gray = $derived((showCorrected ? m?.gray_axis_corrected : m?.gray_axis) ?? []);
+  const grayLut = $derived(m?.gray_axis ?? []);
   const grayVisible = $derived(gray.filter((p) => p.l >= VISIBLE_L));
   const grayWorst = $derived(grayVisible.length ? grayVisible.reduce((a, b) => (b.duv > a.duv ? b : a)) : null);
-  const grayScale = $derived(Math.max(0.015, ...grayVisible.map((p) => p.duv)));
+  // One scale for both views, so switching shows what the correction changed.
+  const grayScale = $derived(
+    Math.max(0.015, ...[...grayLut, ...(m?.gray_axis_corrected ?? [])].filter((p) => p.l >= VISIBLE_L).map((p) => p.duv)),
+  );
   const neutralOn = $derived(!!m && (m.neutral_gray ?? "off") !== "off");
   const neutralLabel: Record<string, string> = { middle_gray: "middle gray", exposure: "every level", white_gain: "white gain" };
   const wg = $derived(m?.white_gain ?? null);
@@ -272,10 +280,21 @@
         </div>
 
         {#if gray.length}
-          <div class="group-title">
-            LUT gray axis — cast from D65{neutralOn ? (m?.neutral_gray === "white_gain" ? " (white balanced with gain before matching)" : " (removed before matching)") : ""}
-          </div>
+          <div class="group-title">Gray axis — cast from D65</div>
           <div class="card gray">
+            {#if hasCorrected}
+              <div class="gray-head">
+                <span class="muted">{showCorrected ? "What the fit matched: the LUT after the correction" : "The LUT as it is"}</span>
+                <Segmented
+                  bind:value={grayView}
+                  label="Gray axis view"
+                  options={[
+                    { value: "lut", label: "LUT" },
+                    { value: "corrected", label: "After correction" },
+                  ]}
+                />
+              </div>
+            {/if}
             <div class="strip" role="img" aria-label="Gray-axis cast by exposure">
               <div class="jnd" style="bottom:{(100 * VISIBLE_DUV) / grayScale}%" title="Δu′v′ {VISIBLE_DUV}: a clearly visible cast"></div>
               {#each gray as p (p.stops)}
@@ -290,7 +309,7 @@
             <div class="sub muted">
               {#if grayWorst && grayWorst.duv > VISIBLE_DUV}
                 Largest visible cast Δu′v′ {fmt(grayWorst.duv, 4)}, {castName(grayWorst)}, at {grayWorst.stops >= 0 ? "+" : ""}{grayWorst.stops} stops.
-                {#if !neutralOn}Neutralize gray removes it before matching.{/if}
+                {#if !neutralOn}Neutralize gray can remove it before matching.{/if}
               {:else}
                 Neutral to within Δu′v′ {fmt(grayWorst?.duv ?? 0, 4)}.
               {/if}
@@ -424,6 +443,13 @@
   }
   .gain {
     color: var(--label);
+  }
+  .gray-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
   }
   .strip {
     position: relative;

@@ -169,6 +169,9 @@ pub struct OpenDrtMatch {
     /// The LUT's gray axis as measured (before any correction), at whole stops.
     #[serde(default)]
     pub gray_axis: Vec<GrayPoint>,
+    /// The same after the gray-axis correction (empty when there is none).
+    #[serde(default)]
+    pub gray_axis_corrected: Vec<GrayPoint>,
     /// The gray-axis correction the targets were given (scores are against the corrected
     /// LUT).
     #[serde(default)]
@@ -670,6 +673,7 @@ pub fn match_opendrt(
         samples_total,
         frozen,
         gray_axis: axis.whole_stops(),
+        gray_axis_corrected: corrector.as_ref().map_or(Vec::new(), |c| axis.corrected_whole_stops(c, &prob.output)),
         neutral_gray: settings.neutral_gray,
         neutral_amount: settings.neutral_amount,
         white_gain,

@@ -274,6 +274,8 @@ export interface OpenDrtMatch {
   frozen: string[];
   /** The LUT's gray axis before correction, whole stops (absent in older reports). */
   gray_axis?: GrayPoint[];
+  /** The gray axis after the correction (empty when off). */
+  gray_axis_corrected?: GrayPoint[];
   neutral_gray?: NeutralGray;
   neutral_amount?: number;
   white_gain?: WhiteGain | null;

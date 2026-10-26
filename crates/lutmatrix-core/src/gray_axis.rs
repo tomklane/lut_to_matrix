@@ -66,6 +66,14 @@ pub struct GrayPoint {
 }
 
 impl GrayPoint {
+    fn new(stops: f64, xyz: &Vec3, output: &OutputSpace) -> GrayPoint {
+        let d65 = whites::D65.to_xyz();
+        let (wu, wv) = uv(&d65);
+        let (u, v) = uv(xyz);
+        let lab = xyz_to_lab(xyz, &(d65 * output.peak_nits()));
+        GrayPoint { stops, nits: xyz.y, l: lab.x, a: lab.y, b: lab.z, duv: (u - wu).hypot(v - wv) }
+    }
+
     /// The direction of the cast, in words ("yellow-green"); "neutral" below 0.0015 Δu′v′.
     pub fn cast(&self) -> &'static str {
         if self.duv < 0.0015 {
@@ -132,7 +140,6 @@ impl GrayAxis {
     pub fn measure(lut: &dyn Transform, input: &InputSpace, output: &OutputSpace, interp: Interpolation) -> GrayAxis {
         let d65 = whites::D65.to_xyz();
         let (wu, wv) = uv(&d65);
-        let lab_white = d65 * output.peak_nits();
         let to_cam = input.xyz_d65_to_rgb();
         let disp = output.rgb_to_xyz();
         let mut points = Vec::new();
@@ -151,8 +158,7 @@ impl GrayAxis {
                 continue;
             }
             let (u, v) = uv(&xyz);
-            let lab = xyz_to_lab(&xyz, &lab_white);
-            points.push(GrayPoint { stops, nits: xyz.y, l: lab.x, a: lab.y, b: lab.z, duv: (u - wu).hypot(v - wv) });
+            points.push(GrayPoint::new(stops, &xyz, output));
             rgb.push((stops, lin));
             if stops.abs() < middle.2 {
                 middle = (u, v, stops.abs());
@@ -168,6 +174,15 @@ impl GrayAxis {
     /// The largest visible cast (L* ≥ [`VISIBLE_L`]) at whole stops, as reported.
     pub fn worst(&self) -> Option<GrayPoint> {
         self.whole_stops().into_iter().filter(|p| p.l >= VISIBLE_L).max_by(|a, b| a.duv.total_cmp(&b.duv))
+    }
+
+    /// The whole-stop points as they come out of `corrector` (for reports).
+    pub fn corrected_whole_stops(&self, corrector: &Corrector, output: &OutputSpace) -> Vec<GrayPoint> {
+        self.rgb
+            .iter()
+            .filter(|(s, _)| s.fract() == 0.0)
+            .map(|(s, rgb)| GrayPoint::new(*s, &corrector.apply(&(output.rgb_to_xyz() * rgb)), output))
+            .collect()
     }
 
     /// The points at whole stops (for reports).
