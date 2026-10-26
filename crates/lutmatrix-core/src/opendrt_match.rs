@@ -10,6 +10,8 @@
 //! 2. Refine the best few starts with bounded Levenberg–Marquardt over every look
 //!    parameter (slider ranges as bounds) plus the grey level. Modules a preset has off
 //!    are switched on at zero strength so the optimiser can use them.
+//!    Optionally the LUT's gray-axis cast is removed from the targets first
+//!    ([`crate::gray_axis`], D33), since OpenDRT's gray is always neutral.
 //! 3. Safety checks on the result: finite in-range output, luminance that never falls as
 //!    exposure rises (else the fit is redone with brilliance frozen), and smoothness
 //!    compared with the stock presets.
@@ -23,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::difference::{Metric, Scorer};
+use crate::gray_axis::{GrayAxis, GrayPoint, NeutralGray, VISIBLE_DUV};
 use crate::lut::{Interpolation, Transform};
 use crate::math::{whites, Vec3};
 use crate::sample::{hue_ring, RingLimit, Settings};
@@ -61,6 +64,10 @@ pub struct MatchSettings {
     /// If the exposure sweep finds luminance falling with exposure, refit with
     /// brilliance frozen.
     pub auto_freeze_brilliance: bool,
+    /// Remove the LUT's gray-axis cast before matching (D33).
+    pub neutral_gray: NeutralGray,
+    /// Strength of that correction, 0…1.
+    pub neutral_amount: f64,
     /// Worker threads (0 = all cores).
     pub threads: usize,
 }
@@ -77,6 +84,8 @@ impl Default for MatchSettings {
             starts: 3,
             creative_whites: vec![2, 1, 3],
             auto_freeze_brilliance: true,
+            neutral_gray: NeutralGray::Off,
+            neutral_amount: 1.0,
             threads: 0,
         }
     }
@@ -102,6 +111,9 @@ pub struct Score {
     pub weighted_mean: f64,
     pub p95: f64,
     pub max: f64,
+    /// Mean over the gray ramp only (how well the gray axis is matched).
+    #[serde(default)]
+    pub gray_mean: f64,
 }
 
 /// A luminance reversal found by the exposure sweep.
@@ -151,15 +163,29 @@ pub struct OpenDrtMatch {
     pub samples_used: usize,
     pub samples_total: usize,
     pub frozen: Vec<String>,
+    /// The LUT's gray axis as measured (before any correction), at whole stops.
+    #[serde(default)]
+    pub gray_axis: Vec<GrayPoint>,
+    /// The gray-axis correction the targets were given (scores are against the corrected
+    /// LUT).
+    #[serde(default)]
+    pub neutral_gray: NeutralGray,
+    #[serde(default = "one")]
+    pub neutral_amount: f64,
     pub safety: Safety,
     pub notes: Vec<String>,
     pub seconds: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 struct Sample {
     di: [f32; 3],
     target: Vec3,
     weight: f64,
+    gray: bool,
 }
 
 /// The fitting problem: samples plus how to score an OpenDRT config on them.
@@ -237,6 +263,7 @@ impl Problem {
 
 fn summarize(e: &[f64], samples: &[Sample]) -> Score {
     let n = e.len().max(1) as f64;
+    let gray: Vec<f64> = e.iter().zip(samples).filter(|(_, s)| s.gray).map(|(e, _)| *e).collect();
     let wsum: f64 = samples.iter().map(|s| s.weight).sum();
     let mut sorted = e.to_vec();
     sorted.sort_by(|a, b| a.total_cmp(b));
@@ -246,22 +273,23 @@ fn summarize(e: &[f64], samples: &[Sample]) -> Score {
         weighted_mean: e.iter().zip(samples).map(|(e, s)| e * s.weight).sum::<f64>() / wsum,
         p95: p95.unwrap_or(0.0),
         max: sorted.last().copied().unwrap_or(0.0),
+        gray_mean: gray.iter().sum::<f64>() / gray.len().max(1) as f64,
     }
 }
 
-/// Training colours: gray ramp −7…+6 stops (weight 4); hue rings (24 hues × 0.3/0.6/0.9
+/// Training colours (XYZ, weight, is gray): gray ramp −7…+6 stops (weight 4); hue rings (24 hues × 0.3/0.6/0.9
 /// of the camera ∩ display chroma limit) at −3…+2 stops; beyond-display rings (12 hues ×
 /// 0.6/0.9 of the camera limit) at −1…+1 stops.
-fn training_colours(ring_space: &InputSpace, output: &OutputSpace) -> Vec<(Vec3, f64)> {
+fn training_colours(ring_space: &InputSpace, output: &OutputSpace) -> Vec<(Vec3, f64, bool)> {
     let wn = whites::D65.to_xyz();
     let mut out = Vec::new();
     for k in 0..=26 {
         let s = -7.0 + 0.5 * k as f64;
-        out.push((wn * (0.18 * 2f64.powf(s)), 4.0));
+        out.push((wn * (0.18 * 2f64.powf(s)), 4.0, true));
     }
     let ring = |hues: usize, sats: &[f64], limit: RingLimit, stops: f64| {
         let st = Settings { hues, saturations: sats.to_vec(), ring_limit: limit, ..Settings::default() };
-        hue_ring(&st, ring_space, output, 0.18 * 2f64.powf(stops)).into_iter().map(|(_, x)| (x, 1.0))
+        hue_ring(&st, ring_space, output, 0.18 * 2f64.powf(stops)).into_iter().map(|(_, x)| (x, 1.0, false))
     };
     for s in -3..=2 {
         out.extend(ring(24, &[0.3, 0.6, 0.9], RingLimit::CameraAndDisplay, s as f64));
@@ -454,16 +482,23 @@ pub fn match_opendrt(
     let metric = settings.metric.resolve(output.transfer.is_hdr());
     let scorer = Scorer { metric, lab_white: whites::D65.to_xyz() * output.peak_nits() };
     let disp = output.rgb_to_xyz();
+    let axis = GrayAxis::measure(lut, &input, &output, settings.interpolation);
+    let corrector = axis.corrector(settings.neutral_gray, settings.neutral_amount, &output);
+    let target = |code: &Vec3| {
+        let x = disp * output.decode(&lut.apply_rgb(code, settings.interpolation));
+        corrector.as_ref().map_or(x, |c| c.apply(&x))
+    };
     let samples_total = colours.len();
     let samples: Vec<Sample> = colours
         .into_iter()
-        .filter_map(|(x, w)| {
+        .filter_map(|(x, w, gray)| {
             let cam = to_cam * x;
             let lut_in = input.encode(&cam);
             (cam.min() >= -1e-9 && lut.in_domain_rgb(&lut_in)).then(|| Sample {
                 di: to_di(&x),
-                target: disp * output.decode(&lut.apply_rgb(&lut_in, settings.interpolation)),
+                target: target(&lut_in),
                 weight: w,
+                gray,
             })
         })
         .collect();
@@ -474,12 +509,33 @@ pub fn match_opendrt(
 
     // The LUT's 18% gray, as OpenDRT's Display Grey Luminance (defined at 100 nits).
     let gray = whites::D65.to_xyz() * 0.18;
-    let gray_nits = (disp * output.decode(&lut.apply_rgb(&input.encode(&(to_cam * gray)), settings.interpolation))).y;
+    let gray_nits = target(&input.encode(&(to_cam * gray))).y;
     let grey0 = match output.transfer {
         DisplayTransfer::Pq { peak_nits } => gray_nits / (1.0 + 0.13 * (peak_nits / 100.0).log2()),
         _ => 100.0 * gray_nits / output.peak_nits(),
     }
     .clamp(GREY_MIN, GREY_MAX) as f32;
+
+    let mut notes = Vec::new();
+    if let Some(w) = axis.worst().filter(|w| w.duv > VISIBLE_DUV) {
+        let at = format!("{:+} stops", w.stops);
+        notes.push(match corrector {
+            None => format!(
+                "the LUT's gray axis is not neutral (largest cast Δu′v′ {:.4}, {}, at {at}); OpenDRT's gray is \
+                 neutral, so the fit trades other colours to get closer. Neutralize Gray removes the cast first",
+                w.duv,
+                w.cast()
+            ),
+            Some(_) => format!(
+                "gray-axis cast removed before matching ({}, {:.0}%; largest was Δu′v′ {:.4}, {}, at {at}); \
+                 errors are against the corrected LUT",
+                settings.neutral_gray.label(),
+                100.0 * settings.neutral_amount.clamp(0.0, 1.0),
+                w.duv,
+                w.cast()
+            ),
+        });
+    }
 
     let prob = Problem { samples, output, scorer, threads: nthreads };
 
@@ -542,7 +598,6 @@ pub fn match_opendrt(
     };
 
     let mut frozen = settings.freeze.clone();
-    let mut notes = Vec::new();
     let (mut cfg, mut start) = fit(&frozen);
     let mut safety = safety_checks(&cfg, &ring_space, &output);
     if !safety.reversals.is_empty() && settings.auto_freeze_brilliance && !frozen.iter().any(|f| f == "brl") {
@@ -586,6 +641,9 @@ pub fn match_opendrt(
         samples_used,
         samples_total,
         frozen,
+        gray_axis: axis.whole_stops(),
+        neutral_gray: settings.neutral_gray,
+        neutral_amount: settings.neutral_amount,
         safety,
         notes,
         seconds: t0.elapsed().as_secs_f64(),
@@ -765,5 +823,33 @@ mod tests {
         assert!(m.fitted.mean <= m.best_preset.mean + 1e-6, "{:?}", m.fitted);
         assert!((m.config.grey_nits - 12.0).abs() < 0.05, "grey {}", m.config.grey_nits);
         assert!(m.safety.ok(), "{:?}", m.safety);
+    }
+
+    /// The same preset with a display tint that grows with level (a film-print-like
+    /// cast): Neutralize Gray (every level) gives back the untinted preset, so the
+    /// search finds it again and the fit is far closer than matching the cast.
+    #[test]
+    fn neutral_gray_removes_a_level_dependent_cast() {
+        let want = Config::from_presets(&Presets { look: 2, tonescale: 9, ..Presets::default() }).unwrap();
+        let drt = OpenDrt::new(&want);
+        let out = rec709();
+        let lut = FnTransform(move |c: &Vec3| {
+            let o = drt.apply([c.x as f32, c.y as f32, c.z as f32]);
+            let lin = out.decode(&Vec3::new(o[0] as f64, o[1] as f64, o[2] as f64)) / out.peak_nits();
+            let t = 1.0 + 0.06 * lin.y.sqrt();
+            out.encode(&(Vec3::new(lin.x * t, lin.y * 1.01, lin.z / t).map(|v| v.min(1.0)) * out.peak_nits()))
+        });
+        let input = InputSpace::new(CameraSpaceId::DaVinciIntermediateDwg);
+        let base = MatchSettings { max_iterations: 20, starts: 1, ..MatchSettings::default() };
+        let off = match_opendrt(&lut, None, input, rec709(), &base).unwrap();
+        let on = MatchSettings { neutral_gray: NeutralGray::Exposure, ..base };
+        let m = match_opendrt(&lut, None, input, rec709(), &on).unwrap();
+        assert!(off.notes.iter().any(|n| n.contains("not neutral")), "{:?}", off.notes);
+        assert!(m.notes.iter().any(|n| n.contains("removed")), "{:?}", m.notes);
+        assert_eq!((m.start.look, m.start.tonescale, m.start.creative_white), (2, 9, 2), "{}", m.start.description);
+        assert!(m.best_preset.mean < 0.6, "{:?}", m.best_preset);
+        assert!(m.fitted.mean < 0.5 * off.fitted.mean, "on {:?} off {:?}", m.fitted, off.fitted);
+        assert_eq!(m.neutral_gray, NeutralGray::Exposure);
+        assert!(m.gray_axis.iter().any(|p| p.duv > VISIBLE_DUV));
     }
 }

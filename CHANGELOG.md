@@ -11,6 +11,13 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   *DCI - 2.6 Power / P3-D65* Display Encoding Preset (P3-D65, 2.6 power, dark surround),
   appended after the stock ones so existing grades keep their setting. The OpenDRT port
   resolves it too (`Presets::display_encoding` 9); checked against the compiled DCTL.
+- OpenDRT Match: **Neutralize gray** (Off / Middle gray / Every level, with an amount)
+  removes the LUT's gray-axis cast before matching, since OpenDRT's gray is always
+  neutral (DECISIONS D33). CLI: `lutmatrix opendrt fit --neutral-gray every-level
+  [--neutral-amount 0.75]`.
+- OpenDRT Match reports the LUT's gray axis (cast from D65 at each stop, with its
+  direction), notes a visible cast, and shows a gray-axis-only error for each score. The
+  app draws the cast per stop.
 
 ## [0.1.0] - 2026-10-17
 

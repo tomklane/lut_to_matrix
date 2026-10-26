@@ -3,11 +3,12 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use lutmatrix_core::analysis::{analyze_with, Analysis, Reference, Severity};
 use lutmatrix_core::dctl;
 use lutmatrix_core::detect::{detect, Confidence, Detection, Guess};
 use lutmatrix_core::difference::Metric;
+use lutmatrix_core::gray_axis::NeutralGray;
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
 use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
@@ -55,6 +56,23 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum NeutralArg {
+    Off,
+    MiddleGray,
+    EveryLevel,
+}
+
+impl From<NeutralArg> for NeutralGray {
+    fn from(a: NeutralArg) -> Self {
+        match a {
+            NeutralArg::Off => NeutralGray::Off,
+            NeutralArg::MiddleGray => NeutralGray::MiddleGray,
+            NeutralArg::EveryLevel => NeutralGray::Exposure,
+        }
+    }
 }
 
 /// The LUT's input and output spaces (detected unless overridden).
@@ -142,6 +160,14 @@ enum OdrtCmd {
         /// Do not refit with brilliance frozen when luminance falls with exposure.
         #[arg(long)]
         no_auto_freeze: bool,
+        /// Remove the LUT's gray-axis cast before matching: "every-level" white-balances
+        /// each luminance level to D65, "middle-gray" applies the 18% gray's balance to
+        /// everything.
+        #[arg(long, value_enum, default_value_t = NeutralArg::Off)]
+        neutral_gray: NeutralArg,
+        /// Strength of --neutral-gray, 0–1 (0.5 keeps half the cast).
+        #[arg(long, default_value_t = 1.0)]
+        neutral_amount: f64,
         /// Also write the full fit report to this file.
         #[arg(long, short)]
         out: Option<PathBuf>,
@@ -390,14 +416,27 @@ fn print_match(m: &OpenDrtMatch) {
     println!("  {:<15} {}", "Output", m.output.name());
     println!("  {:<15} {} of {} inside the LUT's input range", "Samples", m.samples_used, m.samples_total);
     println!("  {:<15} {} (weighted {:.2})", "Start", m.start.description, m.start.score);
-    println!("  {:<15} {} mean / p95 / max", "Error", m.metric.label());
+    println!("  {:<15} {} mean / p95 / max   gray axis", "Error", m.metric.label());
     for (name, s) in [("stock", &m.stock), ("best preset", &m.best_preset), ("fitted", &m.fitted)] {
-        println!("  {:<15}   {name:<12} {:.2} / {:.2} / {:.2}", "", s.mean, s.p95, s.max);
+        println!("  {:<15}   {name:<12} {:.2} / {:.2} / {:.2}   {:.2}", "", s.mean, s.p95, s.max, s.gray_mean);
     }
     println!("  {:<15} (stock = Standard look, ACES-2.0 tonescale, 10 nits grey)", "");
     println!("  {:<15} {:.2} nits (Display Grey Luminance)", "Grey", m.config.grey_nits);
     if !m.frozen.is_empty() {
         println!("  {:<15} {}", "Frozen", m.frozen.join(", "));
+    }
+    if !m.gray_axis.is_empty() {
+        let fix = match m.neutral_gray {
+            NeutralGray::Off => "neutralize gray off".to_string(),
+            g => format!("neutralize gray {}, {:.0}%", g.label(), 100.0 * m.neutral_amount),
+        };
+        println!("  {:<15} LUT's cast from D65 by exposure, Δu′v′ ({fix})", "Gray axis");
+        let row = |f: &dyn Fn(&lutmatrix_core::gray_axis::GrayPoint) -> String| {
+            m.gray_axis.iter().map(f).collect::<Vec<_>>().join(" ")
+        };
+        println!("  {:<15}   stops {}", "", row(&|p| format!("{:>6}", format!("{:+}", p.stops))));
+        println!("  {:<15}   Δu′v′ {}", "", row(&|p| format!("{:>6.4}", p.duv)));
+        println!("  {:<15}   cast  {}", "", row(&|p| format!("{:>6}", short_cast(p.cast()))));
     }
     let s = &m.safety;
     println!(
@@ -418,13 +457,45 @@ fn print_match(m: &OpenDrtMatch) {
     println!("  {:<15} {:.0} s", "Time", m.seconds);
 }
 
+fn short_cast(c: &str) -> &'static str {
+    match c {
+        "neutral" => "-",
+        "red-orange" => "R/O",
+        "yellow" => "Y",
+        "yellow-green" => "Y/G",
+        "green" => "G",
+        "cyan" => "C",
+        "blue" => "B",
+        "magenta" => "M",
+        _ => "R/M",
+    }
+}
+
 fn run_opendrt(args: OdrtArgs) -> Result<(), String> {
     let store = match args.store {
         Some(d) => PresetStore::at(d),
         None => PresetStore::open_default().map_err(|e| e.to_string())?,
     };
     match args.cmd {
-        OdrtCmd::Fit { file, spaces, name, replace, no_save, freeze, reg, iterations, starts, no_auto_freeze, out, json } => {
+        OdrtCmd::Fit {
+            file,
+            spaces,
+            name,
+            replace,
+            no_save,
+            freeze,
+            reg,
+            iterations,
+            starts,
+            no_auto_freeze,
+            neutral_gray,
+            neutral_amount,
+            out,
+            json,
+        } => {
+            if !(0.0..=1.0).contains(&neutral_amount) {
+                return Err("--neutral-amount must be between 0 and 1".into());
+            }
             let lut = Lut::load(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let (input, output, _) = spaces.resolve(&lut)?;
             let preset_name = name.clone().unwrap_or_else(|| {
@@ -440,6 +511,8 @@ fn run_opendrt(args: OdrtArgs) -> Result<(), String> {
                 max_iterations: iterations,
                 starts,
                 auto_freeze_brilliance: !no_auto_freeze,
+                neutral_gray: neutral_gray.into(),
+                neutral_amount,
                 ..MatchSettings::default()
             };
             let m = match_opendrt(&lut, lut.filename.clone(), input, output, &settings).map_err(|e| e.to_string())?;

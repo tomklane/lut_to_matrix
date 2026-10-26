@@ -200,6 +200,17 @@ export interface AppInfo {
   presets_dir: string | null;
 }
 
+/** How the LUT's gray-axis cast is treated when matching OpenDRT (D33). */
+export type NeutralGray = "off" | "middle_gray" | "exposure";
+export interface GrayPoint {
+  stops: number;
+  nits: number;
+  l: number;
+  a: number;
+  b: number;
+  /** u′v′ distance from D65. */
+  duv: number;
+}
 export interface MatchSettings {
   interpolation: "tetrahedral" | "trilinear";
   metric: Metric;
@@ -210,6 +221,8 @@ export interface MatchSettings {
   starts: number;
   creative_whites: number[];
   auto_freeze_brilliance: boolean;
+  neutral_gray: NeutralGray;
+  neutral_amount: number;
   threads: number;
 }
 export const defaultMatchSettings: MatchSettings = {
@@ -222,6 +235,8 @@ export const defaultMatchSettings: MatchSettings = {
   starts: 3,
   creative_whites: [2, 1, 3],
   auto_freeze_brilliance: true,
+  neutral_gray: "off",
+  neutral_amount: 1,
   threads: 0,
 };
 export interface Score {
@@ -229,6 +244,8 @@ export interface Score {
   weighted_mean: number;
   p95: number;
   max: number;
+  /** Mean over the gray ramp only (absent in reports saved before 0.2). */
+  gray_mean?: number;
 }
 export interface OpenDrtMatch {
   lut_name: string | null;
@@ -243,6 +260,10 @@ export interface OpenDrtMatch {
   samples_used: number;
   samples_total: number;
   frozen: string[];
+  /** The LUT's gray axis before correction, whole stops (absent in older reports). */
+  gray_axis?: GrayPoint[];
+  neutral_gray?: NeutralGray;
+  neutral_amount?: number;
   safety: {
     finite_in_range: boolean;
     reversals: { colour: string; at_stops: number; drop_percent: number }[];
