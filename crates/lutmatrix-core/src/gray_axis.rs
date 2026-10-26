@@ -11,7 +11,8 @@
 //!
 //! [`NeutralGray::WhiteGain`] is the colorist's version (D34): one per-channel gain in
 //! display-linear light after the LUT, green kept at 1, that makes the LUT's white D65.
-//! Darker levels keep whatever the LUT does relative to that white.
+//! Darker levels keep whatever the LUT does relative to that white. The gain is scaled
+//! down, all channels together, whenever it would take any LUT output above 1 (D35).
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,10 @@ pub enum NeutralGray {
     /// A per-channel linear gain after the LUT (green 1) that makes the LUT's white D65,
     /// as a Gain node after the LUT would.
     WhiteGain,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 /// Diffuse white: a 90% reflector, log2(0.90 / 0.18) stops over 18% gray.
@@ -119,6 +124,8 @@ pub struct GrayAxis {
     middle: (f64, f64),
     /// (stops, display-linear RGB in cd/m²) of every measured point.
     rgb: Vec<(f64, Vec3)>,
+    /// The LUT's largest output per channel, display-linear cd/m².
+    max_rgb: Vec3,
 }
 
 /// The white used by [`NeutralGray::WhiteGain`] and the gain that balances it.
@@ -129,8 +136,12 @@ pub struct WhiteGain {
     pub stops: f64,
     /// The LUT's output there before the gain (u′v′ distance from D65).
     pub duv: f64,
-    /// Gain on display-linear R, G, B (G = 1).
+    /// Gain on display-linear R, G, B (G = 1 unless scaled down for headroom).
     pub linear: [f64; 3],
+    /// Factor applied to all three channels so that no LUT output exceeds signal 1
+    /// (1 = no scaling needed).
+    #[serde(default = "one")]
+    pub headroom: f64,
     /// The same gain on the encoded signal for a pure power display (linear^(1/γ)), i.e.
     /// what a Gain control after the LUT should be set to; `None` for PQ.
     pub signal: Option<[f64; 3]>,
@@ -168,7 +179,23 @@ impl GrayAxis {
                 curve.push((xyz.y.ln(), u, v));
             }
         }
-        GrayAxis { points, curve, middle: (middle.0, middle.1), rgb }
+        // The LUT's largest output per channel: exact for a table, else sampled over 0–1.
+        let max_code = lut.output_max().unwrap_or_else(|| {
+            let n = 17;
+            let v = |i: usize| i as f64 / (n - 1) as f64;
+            let mut m = [f64::NEG_INFINITY; 3];
+            for r in 0..n {
+                for g in 0..n {
+                    for b in 0..n {
+                        let o = lut.apply_rgb(&Vec3::new(v(r), v(g), v(b)), interp);
+                        m = [m[0].max(o.x), m[1].max(o.y), m[2].max(o.z)];
+                    }
+                }
+            }
+            m
+        });
+        let max_rgb = output.decode(&Vec3::from(max_code));
+        GrayAxis { points, curve, middle: (middle.0, middle.1), rgb, max_rgb }
     }
 
     /// The largest visible cast (L* ≥ [`VISIBLE_L`]) at whole stops, as reported.
@@ -220,11 +247,19 @@ impl GrayAxis {
         let a = amount.clamp(0.0, 1.0);
         let t = output.xyz_to_rgb() * uv_to_xy(su + a * (du - su), sv + a * (dv - sv)).to_xyz();
         let g = Vec3::new(t.x / w.x, t.y / w.y, t.z / w.z) / (t.y / w.y);
+        // Signal 1 in display-linear terms; scale everything down if any channel of any LUT
+        // output would pass it.
+        let limit = output.decode_channel(1.0);
+        let headroom = (0..3)
+            .filter(|&c| self.max_rgb[c] > 0.0)
+            .map(|c| limit / (g[c] * self.max_rgb[c]))
+            .fold(1.0f64, f64::min);
+        let g = g * headroom;
         let signal = match output.transfer {
             DisplayTransfer::Gamma { gamma } => Some([g.x, g.y, g.z].map(|v| v.powf(1.0 / gamma))),
             _ => None,
         };
-        Some(WhiteGain { stops: at, duv: (su - du).hypot(sv - dv), linear: [g.x, g.y, g.z], signal })
+        Some(WhiteGain { stops: at, duv: (su - du).hypot(sv - dv), linear: [g.x, g.y, g.z], headroom, signal })
     }
 
     /// The correction for `mode` at strength `amount` (0…1); `None` when off, or when the
@@ -373,8 +408,8 @@ mod tests {
         let c = ax.corrector(NeutralGray::WhiteGain, 1.0, DIFFUSE_WHITE_STOPS, &out).unwrap();
         let g = c.white_gain().unwrap();
         assert_eq!(g.stops, 2.25, "nearest measured level at or below diffuse white");
-        assert_eq!(g.linear[1], 1.0);
-        assert!(g.linear[0] < 1.0 && g.linear[2] > 1.0, "{:?}", g.linear);
+        assert!((g.linear[1] - g.headroom).abs() < 1e-12, "green is 1 before headroom scaling");
+        assert!(g.linear[0] < g.linear[1] && g.linear[2] > g.linear[1], "{:?}", g.linear);
         let sig = g.signal.unwrap();
         for (s, l) in sig.iter().zip(g.linear) {
             assert!((s - l.powf(1.0 / 2.4)).abs() < 1e-12);
@@ -391,6 +426,28 @@ mod tests {
         let lab = xyz_to_lab(&m, &(whites::D65.to_xyz() * out.peak_nits()));
         assert!(lab.z < -0.5, "middle gray turns cool: b* {}", lab.z);
         let half = ax.white_gain(DIFFUSE_WHITE_STOPS, 0.5, &out).unwrap();
-        assert!(half.linear[2] > 1.0 && half.linear[2] < g.linear[2]);
+        assert!(half.linear[2] / half.linear[1] > 1.0 && half.linear[2] / half.linear[1] < g.linear[2] / g.linear[1]);
+    }
+
+    /// A LUT whose blue output already reaches 1 (signal): balancing a warm white needs
+    /// blue gain > 1, so the whole gain is scaled down until blue × gain peaks at exactly 1.
+    #[test]
+    fn white_gain_never_exceeds_signal_one() {
+        let out = rec709();
+        // Warm (R > G > B) at every level, every channel reaching code 1 at the top.
+        let to_disp = out.xyz_to_rgb() * input().rgb_to_xyz_d65();
+        let lut = FnTransform(move |c: &Vec3| {
+            let y = (to_disp * input().decode(c)).map(|v| (1.05 * v.max(0.0) / (v.max(0.0) + 0.6)).min(1.0));
+            out.encode(&(Vec3::new((1.12 * y.x).min(1.0), (1.06 * y.y).min(1.0), y.z) * out.peak_nits()))
+        });
+        let ax = GrayAxis::measure(&lut, &input(), &out, Interpolation::Tetrahedral);
+        let g = ax.white_gain(DIFFUSE_WHITE_STOPS, 1.0, &out).unwrap();
+        assert!(g.headroom < 1.0, "{g:?}");
+        let peak = (0..3).map(|c| g.linear[c] * ax.max_rgb[c]).fold(0.0, f64::max);
+        assert!((peak - out.peak_nits()).abs() < 1e-9 * out.peak_nits(), "brightest channel lands on 1: {peak}");
+        // A neutral LUT that never reaches 1 needs no scaling.
+        let soft = FnTransform(|c: &Vec3| *c * 0.8);
+        let ax = GrayAxis::measure(&soft, &input(), &out, Interpolation::Tetrahedral);
+        assert_eq!(ax.white_gain(DIFFUSE_WHITE_STOPS, 1.0, &out).unwrap().headroom, 1.0);
     }
 }

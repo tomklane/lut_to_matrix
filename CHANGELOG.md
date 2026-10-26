@@ -12,6 +12,11 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Gain node, leaving the rest of the look relative to that white (DECISIONS D34). The
   result shows the gain both in linear light and as a Gain-control setting. CLI:
   `--neutral-gray white-gain [--white-stops 3]`.
+- White gain never takes the signal above 1: if the gain would push any LUT output past
+  1 in any channel, all three channels are scaled down together until the brightest
+  reaches 1 exactly (DECISIONS D35). The result says how much, or that none was needed.
+- The OpenDRT Match gray-axis chart can show the LUT as it is or after the correction
+  (what the fit actually matched); the report keeps both.
 
 ## [0.2.0] - 2026-10-26
 

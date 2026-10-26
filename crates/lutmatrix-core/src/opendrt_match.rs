@@ -531,15 +531,25 @@ pub fn match_opendrt(
         notes.push(match white_gain {
             Some(g) => {
                 let sig = g.signal.map_or(String::new(), |s| {
-                    format!(" (Gain on the display signal: R {:.3}, G 1, B {:.3})", s[0], s[2])
+                    format!(" (Gain on the display signal: R {:.3}, G {:.3}, B {:.3})", s[0], s[1], s[2])
                 });
+                let head = if g.headroom < 1.0 {
+                    format!(
+                        "; scaled down ×{:.3} ({:.2} stops) so no LUT output goes above signal 1",
+                        g.headroom,
+                        g.headroom.log2()
+                    )
+                } else {
+                    "; no LUT output goes above signal 1".to_string()
+                };
                 format!(
                     "white at {:+.2} stops (Δu′v′ {:.4} from D65) balanced with a linear gain after the LUT: \
-                     R ×{:.3}, G ×1, B ×{:.3}{sig}, {:.0}%; darker levels keep the LUT's cast relative to \
-                     that white; errors are against the balanced LUT",
+                     R ×{:.3}, G ×{:.3}, B ×{:.3}{sig}, {:.0}%{head}; darker levels keep the LUT's cast \
+                     relative to that white; errors are against the balanced LUT",
                     g.stops,
                     g.duv,
                     g.linear[0],
+                    g.linear[1],
                     g.linear[2],
                     100.0 * settings.neutral_amount.clamp(0.0, 1.0)
                 )

@@ -123,6 +123,11 @@ pub trait Transform {
     fn in_domain_rgb(&self, _rgb: &Vec3) -> bool {
         true
     }
+    /// Largest output per channel over every input, if known exactly (a table's largest
+    /// entry: interpolation never exceeds it).
+    fn output_max(&self) -> Option<[f64; 3]> {
+        None
+    }
 }
 
 impl Transform for Lut {
@@ -131,6 +136,14 @@ impl Transform for Lut {
     }
     fn in_domain_rgb(&self, rgb: &Vec3) -> bool {
         self.in_domain(rgb)
+    }
+    fn output_max(&self) -> Option<[f64; 3]> {
+        let data = match (&self.cube, &self.shaper) {
+            (Some(c), _) => &c.data,
+            (None, Some(s)) => &s.data,
+            _ => return None,
+        };
+        Some(data.iter().fold([f64::NEG_INFINITY; 3], |m, v| [m[0].max(v[0]), m[1].max(v[1]), m[2].max(v[2])]))
     }
 }
 

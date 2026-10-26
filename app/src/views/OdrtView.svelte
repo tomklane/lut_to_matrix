@@ -317,8 +317,15 @@
             </div>
             {#if wg}
               <div class="sub num gain">
-                Gain after the LUT, white at {wg.stops >= 0 ? "+" : ""}{fmt(wg.stops, 2)} stops: linear R ×{fmt(wg.linear[0], 3)} · G ×1 · B ×{fmt(wg.linear[2], 3)}
-                {#if wg.signal}— on the display signal (a Gain control) R {fmt(wg.signal[0], 3)} · G 1 · B {fmt(wg.signal[2], 3)}{/if}
+                Gain after the LUT, white at {wg.stops >= 0 ? "+" : ""}{fmt(wg.stops, 2)} stops: linear R ×{fmt(wg.linear[0], 3)} · G ×{fmt(wg.linear[1], 3)} · B ×{fmt(wg.linear[2], 3)}
+                {#if wg.signal}— on the display signal (a Gain control) R {fmt(wg.signal[0], 3)} · G {fmt(wg.signal[1], 3)} · B {fmt(wg.signal[2], 3)}{/if}
+                <div class="faint">
+                  {#if (wg.headroom ?? 1) < 1}
+                    Scaled down ×{fmt(wg.headroom ?? 1, 3)} ({fmt(Math.log2(wg.headroom ?? 1), 2)} stops) so no LUT output goes above 1.
+                  {:else}
+                    No LUT output goes above 1 with this gain.
+                  {/if}
+                </div>
               </div>
             {/if}
           </div>

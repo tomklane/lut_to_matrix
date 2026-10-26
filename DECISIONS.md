@@ -415,3 +415,15 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   tints the blacks.
 - Gain values equal an independent simulation (Ulook4b, +3 stops: R ×0.908, B ×1.344
   linear = R 0.961, B 1.131 on the 2.4 signal).
+
+## D35 — White gain never takes the signal above 1 (user request 2026-10-26)
+- A gain after the LUT that pushes a channel past signal 1 clips in Resolve, so the White
+  gain is scaled down, all three channels by the same factor (`WhiteGain::headroom`, so
+  the white stays D65), until the LUT's largest output in every channel, times its gain,
+  is at most 1. Only scaling down: a LUT with room to spare keeps green at 1.
+- The LUT's largest output per channel is exact for a table (`Transform::output_max`:
+  the largest entry; tetrahedral/trilinear interpolation never exceeds it). Transforms
+  without a table are sampled on a 17³ grid over 0–1.
+- "1" is the encoded signal's top (`decode_channel(1.0)`: 100 nits for the SDR outputs,
+  10 000 for PQ). Reported as the factor and in stops; the app says when none was needed.
+- Ulook4b needs none: red reaches 1.0 but gets a gain below 1; blue peaks at 0.78 → 0.90.

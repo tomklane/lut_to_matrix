@@ -207,8 +207,10 @@ export const DIFFUSE_WHITE_STOPS = Math.log2(0.9 / 0.18);
 export interface WhiteGain {
   stops: number;
   duv: number;
-  /** Display-linear R, G, B gain (G = 1). */
+  /** Display-linear R, G, B gain (G = 1 unless scaled down for headroom). */
   linear: [number, number, number];
+  /** Factor on all channels so no LUT output exceeds signal 1 (1 = none needed). */
+  headroom?: number;
   /** The same on the encoded signal (pure power displays only). */
   signal: [number, number, number] | null;
 }
