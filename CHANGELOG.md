@@ -6,6 +6,46 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Negative × print batches (DECISIONS D36): `lutmatrix batch --negative … --print …`
+  stacks every negative LUT with every print LUT (as two LUT nodes in Resolve), checks
+  each pairing (where 18% gray lands, clipping between the stages), matches OpenDRT to
+  each pair with the usual settings, and writes `batch.csv` plus a report per pair;
+  `--save` puts the fits in your preset library. Pairs are named `negative_print` from
+  film stocks: the negative's stock number and pull/push from its file name, the print's
+  from your `stock-names.json`.
+- `.dat` LUTs (headerless tables, blue fastest) can be opened.
+- App: **Batch** section. Drop or add negative and print LUTs (each goes to the list its
+  name suggests; move or rename any), tick prints by variant, edit the stock-names table,
+  check the pairs or match them all with the OpenDRT Match settings, with progress and
+  Stop. Results are sortable (fitted error, gray axis, stock error, grey level, checks),
+  expand to show the pair check and fit notes, save to the library in one go, and export
+  as CSV. Each run is also written to `batches/` in the data folder and reloaded next
+  time the app opens.
+- OpenDRT Match, Neutralize gray: **White gain** mode balances the LUT's white (diffuse
+  white by default, or +3 / +5 stops) to D65 with one linear gain after the LUT, like a
+  Gain node, leaving the rest of the look relative to that white (DECISIONS D34). The
+  result shows the gain both in linear light and as a Gain-control setting. CLI:
+  `--neutral-gray white-gain [--white-stops 3]`.
+- White gain never takes the signal above 1: if the gain would push any LUT output past
+  1 in any channel, all three channels are scaled down together until the brightest
+  reaches 1 exactly (DECISIONS D35). The result says how much, or that none was needed.
+- The OpenDRT Match gray-axis chart can show the LUT as it is or after the correction
+  (what the fit actually matched); the report keeps both.
+- Batches take **full LUTs** (camera log → display, like `LogC34_DLook4…`) too: they are
+  matched on their own after the pairs, not stacked with a negative. CLI: `--full`.
+- Every LUT added to a batch is **measured** to decide whether it is a negative, a print
+  or a full LUT (how fast its output rises per stop through the mid-tones; DECISIONS
+  D37), instead of guessing from its name. The app shows what each LUT measured as and
+  warns if you move it to another list; `lutmatrix batch` takes LUTs without `-n`/`-p`/`-f`
+  and sorts them the same way, and `lutmatrix inspect` prints the measured stage.
+- Names that would repeat get a lowercase letter each (`FilmLoga`, `FilmLogb`) instead of
+  stopping the batch.
+- Naming: FilmLog 33/34 negatives are named `FilmLog`; `LogC33_`/`LogC34_` full LUTs
+  `FilmLog_` + the print name; a `D55toD58` white move in a print's name adds `_D58`; a
+  `negatives` table in `stock-names.json` names negatives without a stock number.
+  A look code run straight into "Profile" (`Dlook4bProfile_To_…`) is recognised.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

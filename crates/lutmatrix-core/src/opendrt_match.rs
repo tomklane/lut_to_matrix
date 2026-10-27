@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::difference::{Metric, Scorer};
-use crate::gray_axis::{GrayAxis, GrayPoint, NeutralGray, VISIBLE_DUV};
+use crate::gray_axis::{GrayAxis, GrayPoint, NeutralGray, WhiteGain, DIFFUSE_WHITE_STOPS, VISIBLE_DUV};
 use crate::lut::{Interpolation, Transform};
 use crate::math::{whites, Vec3};
 use crate::sample::{hue_ring, RingLimit, Settings};
@@ -68,6 +68,8 @@ pub struct MatchSettings {
     pub neutral_gray: NeutralGray,
     /// Strength of that correction, 0…1.
     pub neutral_amount: f64,
+    /// White for [`NeutralGray::WhiteGain`], stops over 18% gray (default: diffuse white).
+    pub white_stops: f64,
     /// Worker threads (0 = all cores).
     pub threads: usize,
 }
@@ -86,6 +88,7 @@ impl Default for MatchSettings {
             auto_freeze_brilliance: true,
             neutral_gray: NeutralGray::Off,
             neutral_amount: 1.0,
+            white_stops: DIFFUSE_WHITE_STOPS,
             threads: 0,
         }
     }
@@ -166,12 +169,18 @@ pub struct OpenDrtMatch {
     /// The LUT's gray axis as measured (before any correction), at whole stops.
     #[serde(default)]
     pub gray_axis: Vec<GrayPoint>,
+    /// The same after the gray-axis correction (empty when there is none).
+    #[serde(default)]
+    pub gray_axis_corrected: Vec<GrayPoint>,
     /// The gray-axis correction the targets were given (scores are against the corrected
     /// LUT).
     #[serde(default)]
     pub neutral_gray: NeutralGray,
     #[serde(default = "one")]
     pub neutral_amount: f64,
+    /// White gain mode: the white used and the gain after the LUT.
+    #[serde(default)]
+    pub white_gain: Option<WhiteGain>,
     pub safety: Safety,
     pub notes: Vec<String>,
     pub seconds: f64,
@@ -483,7 +492,8 @@ pub fn match_opendrt(
     let scorer = Scorer { metric, lab_white: whites::D65.to_xyz() * output.peak_nits() };
     let disp = output.rgb_to_xyz();
     let axis = GrayAxis::measure(lut, &input, &output, settings.interpolation);
-    let corrector = axis.corrector(settings.neutral_gray, settings.neutral_amount, &output);
+    let corrector = axis.corrector(settings.neutral_gray, settings.neutral_amount, settings.white_stops, &output);
+    let white_gain = corrector.as_ref().and_then(|c| c.white_gain());
     let target = |code: &Vec3| {
         let x = disp * output.decode(&lut.apply_rgb(code, settings.interpolation));
         corrector.as_ref().map_or(x, |c| c.apply(&x))
@@ -517,7 +527,38 @@ pub fn match_opendrt(
     .clamp(GREY_MIN, GREY_MAX) as f32;
 
     let mut notes = Vec::new();
-    if let Some(w) = axis.worst().filter(|w| w.duv > VISIBLE_DUV) {
+    if settings.neutral_gray == NeutralGray::WhiteGain && settings.neutral_amount > 0.0 {
+        notes.push(match white_gain {
+            Some(g) => {
+                let sig = g.signal.map_or(String::new(), |s| {
+                    format!(" (Gain on the display signal: R {:.3}, G {:.3}, B {:.3})", s[0], s[1], s[2])
+                });
+                let head = if g.headroom < 1.0 {
+                    format!(
+                        "; scaled down ×{:.3} ({:.2} stops) so no LUT output goes above signal 1",
+                        g.headroom,
+                        g.headroom.log2()
+                    )
+                } else {
+                    "; no LUT output goes above signal 1".to_string()
+                };
+                format!(
+                    "white at {:+.2} stops (Δu′v′ {:.4} from D65) balanced with a linear gain after the LUT: \
+                     R ×{:.3}, G ×{:.3}, B ×{:.3}{sig}, {:.0}%{head}; darker levels keep the LUT's cast \
+                     relative to that white; errors are against the balanced LUT",
+                    g.stops,
+                    g.duv,
+                    g.linear[0],
+                    g.linear[1],
+                    g.linear[2],
+                    100.0 * settings.neutral_amount.clamp(0.0, 1.0)
+                )
+            }
+            None => "white gain: the LUT's white could not be measured (no gray inside its input range \
+                     at or below that level); matched the LUT as it is"
+                .into(),
+        });
+    } else if let Some(w) = axis.worst().filter(|w| w.duv > VISIBLE_DUV) {
         let at = format!("{:+} stops", w.stops);
         notes.push(match corrector {
             None => format!(
@@ -642,8 +683,10 @@ pub fn match_opendrt(
         samples_total,
         frozen,
         gray_axis: axis.whole_stops(),
+        gray_axis_corrected: corrector.as_ref().map_or(Vec::new(), |c| axis.corrected_whole_stops(c, &prob.output)),
         neutral_gray: settings.neutral_gray,
         neutral_amount: settings.neutral_amount,
+        white_gain,
         safety,
         notes,
         seconds: t0.elapsed().as_secs_f64(),

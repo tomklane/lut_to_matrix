@@ -7,7 +7,7 @@ export interface FileFilter {
   extensions: string[];
 }
 
-export const LUT_FILTER: FileFilter = { name: "LUT", extensions: ["cube", "3dl", "CUBE", "3DL"] };
+export const LUT_FILTER: FileFilter = { name: "LUT", extensions: ["cube", "3dl", "dat", "CUBE", "3DL", "DAT"] };
 
 export async function openFile(filters: FileFilter[], defaultPath?: string): Promise<string | null> {
   if (!inTauri) return devPrompt("Path to open");

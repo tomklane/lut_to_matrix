@@ -7,6 +7,7 @@
   import MatrixView from "./views/MatrixView.svelte";
   import OdrtView from "./views/OdrtView.svelte";
   import PresetsView from "./views/PresetsView.svelte";
+  import BatchView from "./views/BatchView.svelte";
   import About from "./views/About.svelte";
 
   import { analysisEffect } from "./lib/runner.svelte";
@@ -18,9 +19,15 @@
   const views: { id: View; label: string; icon: string }[] = [
     { id: "matrix", label: "Matrix", icon: "matrix" },
     { id: "opendrt", label: "OpenDRT Match", icon: "curve" },
+    { id: "batch", label: "Batch", icon: "stack" },
     { id: "presets", label: "Presets", icon: "library" },
   ];
-  const titles: Record<View, string> = { matrix: "Matrix", opendrt: "OpenDRT Match", presets: "Preset Library" };
+  const titles: Record<View, string> = {
+    matrix: "Matrix",
+    opendrt: "OpenDRT Match",
+    batch: "Batch — Negatives × Prints",
+    presets: "Preset Library",
+  };
 
   onMount(async () => {
     try {
@@ -31,11 +38,16 @@
     }
     ready = true;
     app.refreshPresets();
+    app.initBatch();
     listenForDrops(
       (paths) => {
-        const lut = paths.find((p) => /\.(cube|3dl)$/i.test(p));
+        if (app.view === "batch") {
+          app.addToBatch(paths);
+          return;
+        }
+        const lut = paths.find((p) => /\.(cube|3dl|dat)$/i.test(p));
         if (lut) app.openLut(lut);
-        else app.notify("Drop a .cube or .3dl LUT", "error");
+        else app.notify("Drop a .cube, .3dl or .dat LUT", "error");
       },
       (over) => (app.dragging = over),
     );
@@ -62,7 +74,7 @@
     if (mod && e.key.toLowerCase() === "o") {
       e.preventDefault();
       chooseLut();
-    } else if (mod && ["1", "2", "3"].includes(e.key)) {
+    } else if (mod && ["1", "2", "3", "4"].includes(e.key)) {
       e.preventDefault();
       app.view = views[Number(e.key) - 1].id;
     }
@@ -82,6 +94,8 @@
           <span>{v.label}</span>
           {#if v.id === "presets" && app.presets?.presets.length}
             <span class="count">{app.presets.presets.length}</span>
+          {:else if v.id === "batch" && app.batchProgress}
+            <span class="count">{app.batchProgress.done}/{app.batchProgress.total}</span>
           {/if}
         </button>
       {/each}
@@ -114,6 +128,8 @@
           <MatrixView onopen={chooseLut} />
         {:else if app.view === "opendrt"}
           <OdrtView onopen={chooseLut} />
+        {:else if app.view === "batch"}
+          <BatchView />
         {:else}
           <PresetsView />
         {/if}
@@ -123,7 +139,7 @@
 
   {#if app.dragging}
     <div class="dropveil fade-in">
-      <div class="dropbox"><Icon name="drop" size={34} /><div>Drop to open the LUT</div></div>
+      <div class="dropbox"><Icon name="drop" size={34} /><div>{app.view === "batch" ? "Drop to add LUTs to the batch" : "Drop to open the LUT"}</div></div>
     </div>
   {/if}
 

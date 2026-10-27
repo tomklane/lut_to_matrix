@@ -201,7 +201,19 @@ export interface AppInfo {
 }
 
 /** How the LUT's gray-axis cast is treated when matching OpenDRT (D33). */
-export type NeutralGray = "off" | "middle_gray" | "exposure";
+export type NeutralGray = "off" | "middle_gray" | "exposure" | "white_gain";
+/** Diffuse white (a 90% reflector), stops over 18% gray. */
+export const DIFFUSE_WHITE_STOPS = Math.log2(0.9 / 0.18);
+export interface WhiteGain {
+  stops: number;
+  duv: number;
+  /** Display-linear R, G, B gain (G = 1 unless scaled down for headroom). */
+  linear: [number, number, number];
+  /** Factor on all channels so no LUT output exceeds signal 1 (1 = none needed). */
+  headroom?: number;
+  /** The same on the encoded signal (pure power displays only). */
+  signal: [number, number, number] | null;
+}
 export interface GrayPoint {
   stops: number;
   nits: number;
@@ -223,6 +235,7 @@ export interface MatchSettings {
   auto_freeze_brilliance: boolean;
   neutral_gray: NeutralGray;
   neutral_amount: number;
+  white_stops: number;
   threads: number;
 }
 export const defaultMatchSettings: MatchSettings = {
@@ -237,6 +250,7 @@ export const defaultMatchSettings: MatchSettings = {
   auto_freeze_brilliance: true,
   neutral_gray: "off",
   neutral_amount: 1,
+  white_stops: DIFFUSE_WHITE_STOPS,
   threads: 0,
 };
 export interface Score {
@@ -262,8 +276,11 @@ export interface OpenDrtMatch {
   frozen: string[];
   /** The LUT's gray axis before correction, whole stops (absent in older reports). */
   gray_axis?: GrayPoint[];
+  /** The gray axis after the correction (empty when off). */
+  gray_axis_corrected?: GrayPoint[];
   neutral_gray?: NeutralGray;
   neutral_amount?: number;
+  white_gain?: WhiteGain | null;
   safety: {
     finite_in_range: boolean;
     reversals: { colour: string; at_stops: number; drop_percent: number }[];
@@ -286,6 +303,97 @@ export interface PresetList {
   dir: string;
   presets: PresetRow[];
   problems: string[];
+}
+
+/* ---------- batch: every negative × every print, plus full LUTs ---------- */
+
+export type Stage = "negative" | "print" | "full";
+/** What a LUT measured as (DECISIONS D37). */
+export interface StageMeasure {
+  stage: Stage;
+  slope: number;
+  per_stop: boolean;
+  reason: string;
+}
+export interface StockNames {
+  looks: Record<string, string>;
+  variants: Record<string, string>;
+  flags: Record<string, string>;
+  negatives: Record<string, string>;
+}
+export interface BatchItem {
+  id: number;
+  stage: Stage;
+  path: string;
+  file: string;
+  name: string;
+  name_edited: boolean;
+  input: InputSpace;
+  output: OutputSpace;
+  include: boolean;
+  measured: StageMeasure;
+  auto_name: string;
+  variant: string | null;
+  variant_word: string | null;
+  flags: string[];
+}
+export interface PairCheck {
+  gray_nits: number;
+  negative_out: [number, number];
+  print_in: [number, number];
+  outside_percent: number;
+  ok: boolean;
+  problems: string[];
+}
+export interface PairSummary {
+  name: string;
+  negative: string;
+  print: string;
+  /** A full LUT matched on its own (`print` is its name, `negative` is empty). */
+  full: boolean;
+  check: PairCheck;
+  error: string | null;
+  metric: string | null;
+  stock: number | null;
+  best_preset: number | null;
+  fitted: number | null;
+  p95: number | null;
+  gray: number | null;
+  grey_nits: number | null;
+  start: string | null;
+  safety_ok: boolean | null;
+  notes: string[];
+}
+export interface BatchView {
+  items: BatchItem[];
+  results: PairSummary[];
+  running: boolean;
+  folder: string | null;
+  names_path: string | null;
+}
+export interface BatchItemUpdate {
+  id: number;
+  name?: string;
+  stage?: Stage;
+  input?: InputSpace;
+  output?: OutputSpace;
+  include?: boolean;
+}
+export interface BatchProgress {
+  done: number;
+  total: number;
+  pair: PairSummary;
+}
+
+/** Calls `f` for every `batch-pair` event (a pair finished); returns the unlisten function. */
+export async function onBatchPair(f: (p: BatchProgress) => void): Promise<() => void> {
+  if (!inTauri) {
+    const h = (e: Event) => f((e as CustomEvent<BatchProgress>).detail);
+    window.addEventListener("batch-pair", h);
+    return () => window.removeEventListener("batch-pair", h);
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<BatchProgress>("batch-pair", (e) => f(e.payload));
 }
 
 /* ---------- commands ---------- */
@@ -319,4 +427,18 @@ export const api = {
   presetImport: (paths: string[], replace: boolean) => invoke<string[]>("preset_import", { paths, replace }),
   presetExport: (name: string, path: string) => invoke<void>("preset_export", { name, path }),
   opendrtBuild: (names: string[], path: string) => invoke<string>("opendrt_build", { names, path }),
+  batchState: () => invoke<BatchView>("batch_state"),
+  batchAdd: (paths: string[], stage: Stage | null = null) => invoke<BatchView>("batch_add", { paths, stage }),
+  batchUpdate: (updates: BatchItemUpdate[]) => invoke<BatchView>("batch_update", { updates }),
+  batchRemove: (ids: number[]) => invoke<BatchView>("batch_remove", { ids }),
+  stockNamesGet: () => invoke<StockNames>("stock_names_get"),
+  stockNamesSet: (names: StockNames) => invoke<BatchView>("stock_names_set", { names }),
+  stockNamesImport: (path: string) => invoke<StockNames>("stock_names_import", { path }),
+  batchRun: (req: { settings: MatchSettings; check_only: boolean; fit_mismatched: boolean }) =>
+    invoke<BatchView>("batch_run", { req }),
+  batchCancel: () => invoke<void>("batch_cancel"),
+  batchResult: (name: string) => invoke<OpenDrtMatch>("batch_result", { name }),
+  batchSave: (names: string[], replace: boolean) => invoke<string[]>("batch_save", { names, replace }),
+  batchExisting: (names: string[]) => invoke<string[]>("batch_existing", { names }),
+  batchExportCsv: (path: string) => invoke<void>("batch_export_csv", { path }),
 };

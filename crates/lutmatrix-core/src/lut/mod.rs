@@ -1,7 +1,8 @@
 //! LUT model, file I/O and interpolation.
 //!
 //! A [`Lut`] is an optional 1D shaper followed by an optional 3D table, which covers
-//! plain 1D `.cube`, plain 3D `.cube`, Resolve-style shaper+3D `.cube`, and `.3dl`.
+//! plain 1D `.cube`, plain 3D `.cube`, Resolve-style shaper+3D `.cube`, `.3dl`, and
+//! headerless `.dat` tables (N³ float triples, blue fastest, as `.3dl`).
 
 mod cube;
 mod interp;
@@ -30,7 +31,7 @@ pub enum LutError {
     Parse { line: usize, msg: String },
     #[error("{0}")]
     Invalid(String),
-    #[error("unsupported LUT format '{0}' (expected .cube or .3dl)")]
+    #[error("unsupported LUT format '{0}' (expected .cube, .3dl or .dat)")]
     UnsupportedFormat(String),
 }
 
@@ -39,6 +40,8 @@ pub enum LutError {
 pub enum LutFormat {
     Cube,
     ThreeDl,
+    /// Headerless N³ table, blue fastest (read as `.3dl`).
+    Dat,
 }
 
 /// Per-channel 1D table. Entry `i` is the output for input
@@ -123,6 +126,11 @@ pub trait Transform {
     fn in_domain_rgb(&self, _rgb: &Vec3) -> bool {
         true
     }
+    /// Largest output per channel over every input, if known exactly (a table's largest
+    /// entry: interpolation never exceeds it).
+    fn output_max(&self) -> Option<[f64; 3]> {
+        None
+    }
 }
 
 impl Transform for Lut {
@@ -131,6 +139,14 @@ impl Transform for Lut {
     }
     fn in_domain_rgb(&self, rgb: &Vec3) -> bool {
         self.in_domain(rgb)
+    }
+    fn output_max(&self) -> Option<[f64; 3]> {
+        let data = match (&self.cube, &self.shaper) {
+            (Some(c), _) => &c.data,
+            (None, Some(s)) => &s.data,
+            _ => return None,
+        };
+        Some(data.iter().fold([f64::NEG_INFINITY; 3], |m, v| [m[0].max(v[0]), m[1].max(v[1]), m[2].max(v[2])]))
     }
 }
 
@@ -158,6 +174,19 @@ pub struct Lut {
 }
 
 impl Lut {
+    /// A plain 3D LUT (no shaper, no file).
+    pub fn from_3d(cube: Lut3D) -> Lut {
+        Lut {
+            format: LutFormat::Cube,
+            filename: None,
+            title: None,
+            comments: Vec::new(),
+            shaper: None,
+            cube: Some(cube),
+            warnings: Vec::new(),
+        }
+    }
+
     /// Load a `.cube` or `.3dl` file. Works with Windows and macOS paths (including
     /// non-UTF-8 bytes in the file, which are decoded lossily).
     pub fn load(path: &Path) -> Result<Self, LutError> {
@@ -173,6 +202,11 @@ impl Lut {
         let mut lut = match ext.as_str() {
             "cube" => parse_cube(&text)?,
             "3dl" => parse_3dl(&text)?,
+            "dat" => {
+                let mut l = parse_3dl(&text)?;
+                l.format = LutFormat::Dat;
+                l
+            }
             other => {
                 // Sniff: .cube files declare LUT_*_SIZE.
                 if text.contains("LUT_3D_SIZE") || text.contains("LUT_1D_SIZE") {
@@ -236,6 +270,7 @@ impl Lut {
         let fmt = match self.format {
             LutFormat::Cube => ".cube",
             LutFormat::ThreeDl => ".3dl",
+            LutFormat::Dat => ".dat",
         };
         match (&self.shaper, &self.cube) {
             (Some(s), Some(c)) => format!("{}-point shaper + 3D {}³ {fmt}", s.size(), c.size),
