@@ -1970,7 +1970,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lutmatrix-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lutmatrix-core",
  "lutmatrix-opendrt",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "lutmatrix-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "lutmatrix-core",
@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "lutmatrix-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lutmatrix-opendrt",
  "nalgebra",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "lutmatrix-opendrt"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",

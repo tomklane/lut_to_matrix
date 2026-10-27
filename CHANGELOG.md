@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Added
 - Negative × print batches (DECISIONS D36): `lutmatrix batch --negative … --print …`
   stacks every negative LUT with every print LUT (as two LUT nodes in Resolve), checks
@@ -15,8 +17,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   film stocks: the negative's stock number and pull/push from its file name, the print's
   from your `stock-names.json`.
 - `.dat` LUTs (headerless tables, blue fastest) can be opened.
-- App: **Batch** section. Drop or add negative and print LUTs (each goes to the list its
-  name suggests; move or rename any), tick prints by variant, edit the stock-names table,
+- App: **Batch** section. Drop or add negative, print and full LUTs (each is measured and
+  sorted into its list; move or rename any), tick prints by variant, edit the stock-names table,
   check the pairs or match them all with the OpenDRT Match settings, with progress and
   Stop. Results are sortable (fitted error, gray axis, stock error, grey level, checks),
   expand to show the pair check and fit notes, save to the library in one go, and export
@@ -159,5 +161,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tomklane/lut_to_matrix/releases/tag/v0.1.0
