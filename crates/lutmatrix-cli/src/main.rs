@@ -13,9 +13,9 @@ use lutmatrix_core::lut::Lut;
 use lutmatrix_core::math::{Cat, Mat3};
 use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
 use lutmatrix_core::preset_store::{import_file, PresetStore, StoredPreset};
-use lutmatrix_opendrt::writer::lut_match_dctl;
 use lutmatrix_core::sample::{GrayAnchor, Settings, WhiteMode};
 use lutmatrix_core::spaces::{CameraSpaceId, DisplayGamut, DisplayTransfer, InputSpace, OutputSpace};
+use lutmatrix_opendrt::writer::lut_match_dctl;
 
 #[derive(Parser)]
 #[command(name = "lutmatrix", version = lutmatrix_core::VERSION, about = "Extract a 3x3 XYZ matrix from a camera-log → display LUT")]
@@ -47,6 +47,10 @@ enum Cmd {
     /// Match OpenDRT to LUTs, keep the results in your local preset library, and build
     /// OpenDRT DCTLs with them as "LUT Match" look presets.
     Opendrt(OdrtArgs),
+    /// Stack every negative LUT with every print LUT and match OpenDRT to each pair.
+    /// Pairs are named `negative_print` from film stocks: the negative's stock number
+    /// (+ pull/push) from its file name, the print's from your stock-names table.
+    Batch(BatchArgs),
     /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
     Fit {
         file: PathBuf,
@@ -119,6 +123,71 @@ impl SpaceOpts {
         }
         Ok((input, output, d))
     }
+}
+
+#[derive(Args)]
+struct BatchArgs {
+    /// LUTs of any stage: each is measured and sorted into negatives, prints or full LUTs.
+    #[arg(num_args = 0..)]
+    luts: Vec<PathBuf>,
+    /// Negative LUTs (camera log → film negative), whatever they measure as.
+    #[arg(long = "negative", short = 'n', num_args = 1..)]
+    negatives: Vec<PathBuf>,
+    /// Print LUTs (film negative → display), whatever they measure as.
+    #[arg(long = "print", short = 'p', num_args = 1..)]
+    prints: Vec<PathBuf>,
+    /// Full LUTs (camera log → display): matched on their own, not stacked.
+    #[arg(long = "full", short = 'f', num_args = 1..)]
+    fulls: Vec<PathBuf>,
+    /// Stock-names table (default: stock-names.json in your data folder).
+    #[arg(long)]
+    names: Option<PathBuf>,
+    /// Override the negatives' camera space, e.g. arri_log_c4_awg4 (default: detected).
+    #[arg(long)]
+    input: Option<String>,
+    /// ARRI LogC3 exposure index for the negatives.
+    #[arg(long)]
+    ei: Option<u16>,
+    /// Override the prints' display gamut: rec709, p3_d65, p3_dci, rec2020.
+    #[arg(long)]
+    gamut: Option<String>,
+    /// Override the prints' display transfer: 2.2, 2.4, 2.6 or pq.
+    #[arg(long)]
+    transfer: Option<String>,
+    /// Only name and check the pairs (no fitting).
+    #[arg(long)]
+    check_only: bool,
+    /// Fit pairs whose check failed too (default: skip them).
+    #[arg(long)]
+    fit_mismatched: bool,
+    /// quick, standard or thorough.
+    #[arg(long, default_value = "standard")]
+    effort: String,
+    /// See `opendrt fit --neutral-gray`.
+    #[arg(long, value_enum, default_value_t = NeutralArg::Off)]
+    neutral_gray: NeutralArg,
+    #[arg(long, default_value_t = 1.0)]
+    neutral_amount: f64,
+    #[arg(long, default_value_t = DIFFUSE_WHITE_STOPS)]
+    white_stops: f64,
+    /// Keep brilliance at the start preset.
+    #[arg(long)]
+    freeze_brilliance: bool,
+    /// Pull towards the start preset (0 = off).
+    #[arg(long, default_value_t = 0.0)]
+    reg: f64,
+    /// Folder for batch.csv and one JSON report per pair.
+    #[arg(long, short, default_value = "lutmatrix-batch")]
+    out: PathBuf,
+    /// Save every fitted pair to your preset library (named like the pair).
+    #[arg(long)]
+    save: bool,
+    /// With --save: replace presets of the same name.
+    #[arg(long)]
+    replace: bool,
+    /// Preset library folder (default: your per-user app data folder).
+    #[arg(long)]
+    store: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -287,7 +356,9 @@ fn parse_transfer(t: &str, peak: Option<f64>) -> Result<DisplayTransfer, String>
 
 /// Load the --through reference (if any). Its output space defaults to the LUT's.
 fn load_reference(o: &FitOpts, lut_output: OutputSpace) -> Result<Option<(Lut, InputSpace, OutputSpace, String)>, String> {
-    let Some(path) = &o.through else { return Ok(None) };
+    let Some(path) = &o.through else {
+        return Ok(None);
+    };
     let lut = Lut::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let input = InputSpace::new(parse_id::<CameraSpaceId>(&o.through_input, "input space")?);
     let mut out = lut_output;
@@ -369,10 +440,7 @@ fn print_analysis(file: &str, a: &Analysis) {
     println!(
         "  Samples         {} used{}",
         a.samples_used,
-        a.samples_skipped
-            .iter()
-            .map(|(s, n)| format!(", {n} {}", s.label()))
-            .collect::<String>()
+        a.samples_skipped.iter().map(|(s, n)| format!(", {n} {}", s.label())).collect::<String>()
     );
     if let Some(r) = &a.reference {
         println!("  Fitted through  {} ({} → {})", r.name, r.input_name, r.output_name);
@@ -386,7 +454,13 @@ fn print_analysis(file: &str, a: &Analysis) {
     let row = |name: &str, s: &lutmatrix_core::analysis::FitStats| {
         println!(
             "  {name:<15} {}: mean {:.3}  rms {:.3}  p95 {:.3}  max {:.3}  | neutral {:.3}, Δu′v′ {:.5}",
-            s.metric.label(), s.mean, s.rms, s.p95, s.max, s.neutral, s.neutral_duv
+            s.metric.label(),
+            s.mean,
+            s.rms,
+            s.p95,
+            s.max,
+            s.neutral,
+            s.neutral_duv
         );
     };
     if let Some(r) = &a.reference {
@@ -401,11 +475,7 @@ fn print_analysis(file: &str, a: &Analysis) {
     let s = a.stats_refined.as_ref().unwrap_or(&a.stats_ls);
     println!(
         "  Worst hues      {}",
-        s.worst_hues
-            .iter()
-            .map(|h| format!("{} {:.0}° ({:.2})", h.name, h.hue_deg, h.mean))
-            .collect::<Vec<_>>()
-            .join(", ")
+        s.worst_hues.iter().map(|h| format!("{} {:.0}° ({:.2})", h.name, h.hue_deg, h.mean)).collect::<Vec<_>>().join(", ")
     );
     for d in &a.diagnostics {
         let tag = match d.severity {
@@ -438,9 +508,7 @@ fn print_match(m: &OpenDrtMatch) {
             g => format!("neutralize gray {}, {:.0}%", g.label(), 100.0 * m.neutral_amount),
         };
         println!("  {:<15} LUT's cast from D65 by exposure, Δu′v′ ({fix})", "Gray axis");
-        let row = |f: &dyn Fn(&lutmatrix_core::gray_axis::GrayPoint) -> String| {
-            m.gray_axis.iter().map(f).collect::<Vec<_>>().join(" ")
-        };
+        let row = |f: &dyn Fn(&lutmatrix_core::gray_axis::GrayPoint) -> String| m.gray_axis.iter().map(f).collect::<Vec<_>>().join(" ");
         println!("  {:<15}   stops {}", "", row(&|p| format!("{:>6}", format!("{:+}", p.stops))));
         println!("  {:<15}   Δu′v′ {}", "", row(&|p| format!("{:>6.4}", p.duv)));
         println!("  {:<15}   cast  {}", "", row(&|p| format!("{:>6}", short_cast(p.cast()))));
@@ -475,6 +543,154 @@ fn short_cast(c: &str) -> &'static str {
         "blue" => "B",
         "magenta" => "M",
         _ => "R/M",
+    }
+}
+
+fn run_batch(a: BatchArgs) -> Result<(), String> {
+    use lutmatrix_core::batch::{self, BatchOptions, Full, Negative, Print};
+    use lutmatrix_core::film::{dedupe, measure_stage, Stage, StockNames};
+    use std::sync::atomic::AtomicBool;
+
+    let names_path = a.names.clone().or_else(StockNames::default_path);
+    let names = match &names_path {
+        Some(p) => StockNames::load(p)?,
+        None => StockNames::default(),
+    };
+    let spaces = SpaceOpts { input: a.input.clone(), ei: a.ei, gamut: a.gamut.clone(), transfer: a.transfer.clone(), peak: None };
+    let file = |p: &PathBuf| p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    // Every LUT is measured; given lists keep the stage they were given as.
+    let mut loaded: Vec<(PathBuf, Stage, Lut)> = Vec::new();
+    for (list, forced) in
+        [(&a.luts, None), (&a.negatives, Some(Stage::Negative)), (&a.prints, Some(Stage::Print)), (&a.fulls, Some(Stage::Full))]
+    {
+        for p in list {
+            let lut = Lut::load(p).map_err(|e| format!("{}: {e}", p.display()))?;
+            let m = measure_stage(&lut);
+            let stage = match forced {
+                Some(f) => {
+                    if f != m.stage {
+                        eprintln!("note: {} measures as {} ({}); using it as given", file(p), stage_word(m.stage), m.reason);
+                    }
+                    f
+                }
+                None => {
+                    println!("{:<52} {:<8} {}", file(p), stage_word(m.stage), m.reason);
+                    m.stage
+                }
+            };
+            loaded.push((p.clone(), stage, lut));
+        }
+    }
+    // Names per list, repeats lettered a, b, c….
+    let mut lists: [Vec<String>; 3] = Default::default();
+    for (p, stage, _) in &loaded {
+        lists[*stage as usize].push(names.name_for(*stage, &file(p)));
+    }
+    lists.iter_mut().for_each(|l| dedupe(l));
+    let mut lists = lists.map(|l| l.into_iter());
+    let (mut negatives, mut prints, mut fulls) = (Vec::new(), Vec::new(), Vec::new());
+    for (p, stage, lut) in loaded {
+        let name = lists[stage as usize].next().expect("one name per LUT");
+        let (input, output, _) = spaces.resolve(&lut)?;
+        match stage {
+            Stage::Negative => negatives.push(Negative { name, file: file(&p), lut, input }),
+            Stage::Print => prints.push(Print { name, file: file(&p), lut, output }),
+            Stage::Full => fulls.push(Full { name, file: file(&p), lut, input, output }),
+        }
+    }
+    if negatives.len() * prints.len() == 0 && fulls.is_empty() {
+        return Err(format!(
+            "nothing to run: {} negative(s), {} print(s), {} full LUT(s); a pair needs at least one negative and one print",
+            negatives.len(),
+            prints.len(),
+            fulls.len()
+        ));
+    }
+    let (iterations, starts) = match a.effort.as_str() {
+        "quick" => (40, 2),
+        "standard" => (150, 3),
+        "thorough" => (300, 4),
+        e => return Err(format!("--effort must be quick, standard or thorough (got '{e}')")),
+    };
+    let settings = MatchSettings {
+        max_iterations: iterations,
+        starts,
+        regularization: a.reg,
+        freeze: if a.freeze_brilliance { vec!["brl".into()] } else { Vec::new() },
+        auto_freeze_brilliance: !a.freeze_brilliance,
+        neutral_gray: a.neutral_gray.into(),
+        neutral_amount: a.neutral_amount,
+        white_stops: a.white_stops,
+        ..MatchSettings::default()
+    };
+    let store = if a.save {
+        Some(match &a.store {
+            Some(d) => PresetStore::at(d),
+            None => PresetStore::open_default().map_err(|e| e.to_string())?,
+        })
+    } else {
+        None
+    };
+    std::fs::create_dir_all(&a.out).map_err(|e| format!("{}: {e}", a.out.display()))?;
+    let opts = BatchOptions { settings, fit_mismatched: a.fit_mismatched, check_only: a.check_only };
+    println!(
+        "{} negative(s) × {} print(s) = {} pairs, + {} full LUT(s){}",
+        negatives.len(),
+        prints.len(),
+        negatives.len() * prints.len(),
+        fulls.len(),
+        if a.check_only { " (check only)" } else { "" }
+    );
+    let cancel = AtomicBool::new(false);
+    let out = a.out.clone();
+    let mut write_err = None;
+    let results = batch::run(&negatives, &prints, &fulls, &opts, &cancel, |done, total, r| {
+        let what = match (&r.result, &r.error) {
+            (Some(m), _) => format!(
+                "{} {:.2} → {:.2} (gray {:.2}), grey {:.2} nits{}",
+                m.metric.label(),
+                m.stock.mean,
+                m.fitted.mean,
+                m.fitted.gray_mean,
+                m.config.grey_nits,
+                if m.safety.ok() { "" } else { ", CHECK safety" }
+            ),
+            (None, Some(e)) => e.clone(),
+            (None, None) => format!(
+                "18% gray → {:.2} nits{}",
+                r.check.gray_nits,
+                if r.check.ok { String::new() } else { format!("  MISMATCH: {}", r.check.problems.join("; ")) }
+            ),
+        };
+        println!("[{done}/{total}] {:<44} {what}", r.name);
+        let path = out.join(format!("{}.json", r.name.replace(['/', '\\', ':'], "-")));
+        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(r).unwrap() + "\n") {
+            write_err.get_or_insert(format!("{}: {e}", path.display()));
+        }
+        if let (Some(store), Some(m)) = (&store, &r.result) {
+            match StoredPreset::from_match(m, Some(&r.name))
+                .map_err(|e| e.to_string())
+                .and_then(|p| store.save(&p, a.replace).map_err(|e| e.to_string()))
+            {
+                Ok(_) => {}
+                Err(e) => eprintln!("  not saved: {e}"),
+            }
+        }
+    });
+    if let Some(e) = write_err {
+        return Err(e);
+    }
+    let csv_path = a.out.join("batch.csv");
+    std::fs::write(&csv_path, batch::csv(&results)).map_err(|e| format!("{}: {e}", csv_path.display()))?;
+    println!("wrote {} and {} pair report(s) to {}", csv_path.display(), results.len(), a.out.display());
+    Ok(())
+}
+
+fn stage_word(s: lutmatrix_core::film::Stage) -> &'static str {
+    match s {
+        lutmatrix_core::film::Stage::Negative => "negative",
+        lutmatrix_core::film::Stage::Print => "print",
+        lutmatrix_core::film::Stage::Full => "full",
     }
 }
 
@@ -627,11 +843,7 @@ fn conf(c: Confidence) -> &'static str {
 }
 
 fn line<T>(label: &str, value: String, g: &Guess<T>) {
-    println!(
-        "  {label:<15} {value}   [{} confidence, {:.0}%]",
-        conf(g.confidence),
-        g.certainty * 100.0
-    );
+    println!("  {label:<15} {value}   [{} confidence, {:.0}%]", conf(g.confidence), g.certainty * 100.0);
     for r in &g.reasons {
         println!("  {:<15}   · {r}", "");
     }
@@ -647,12 +859,14 @@ fn main() -> ExitCode {
                 match Lut::load(&f) {
                     Ok(lut) => {
                         let d = detect(&lut);
+                        let stage = lutmatrix_core::film::measure_stage(&lut);
                         if json {
                             out.push(serde_json::json!({
                                 "file": f.display().to_string(),
                                 "lut": lut.describe(),
                                 "title": lut.title,
                                 "detection": d,
+                                "stage": stage,
                             }));
                             continue;
                         }
@@ -663,6 +877,7 @@ fn main() -> ExitCode {
                         }
                         let (lo, hi) = lut.output_extent();
                         println!("  {:<15} {lo:.4} … {hi:.4}", "Output range");
+                        println!("  {:<15} {} ({})", "Stage", stage_word(stage.stage), stage.reason);
                         line("Input", d.input.value.name(), &d.input);
                         for (alt, s) in d.input.alternatives.iter().take(3) {
                             println!("  {:<15}   alt: {} (score {s:.1})", "", alt.name());
@@ -741,6 +956,13 @@ fn main() -> ExitCode {
             println!("{}", meta.fit_error);
             ExitCode::SUCCESS
         }
+        Cmd::Batch(args) => match run_batch(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Cmd::Opendrt(args) => match run_opendrt(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
