@@ -32,6 +32,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reaches 1 exactly (DECISIONS D35). The result says how much, or that none was needed.
 - The OpenDRT Match gray-axis chart can show the LUT as it is or after the correction
   (what the fit actually matched); the report keeps both.
+- Batches take **full LUTs** (camera log → display, like `LogC34_DLook4…`) too: they are
+  matched on their own after the pairs, not stacked with a negative. CLI: `--full`.
+- Every LUT added to a batch is **measured** to decide whether it is a negative, a print
+  or a full LUT (how fast its output rises per stop through the mid-tones; DECISIONS
+  D37), instead of guessing from its name. The app shows what each LUT measured as and
+  warns if you move it to another list; `lutmatrix batch` takes LUTs without `-n`/`-p`/`-f`
+  and sorts them the same way, and `lutmatrix inspect` prints the measured stage.
+- Names that would repeat get a lowercase letter each (`FilmLoga`, `FilmLogb`) instead of
+  stopping the batch.
+- Naming: FilmLog 33/34 negatives are named `FilmLog`; `LogC33_`/`LogC34_` full LUTs
+  `FilmLog_` + the print name; a `D55toD58` white move in a print's name adds `_D58`; a
+  `negatives` table in `stock-names.json` names negatives without a stock number.
 
 ## [0.2.0] - 2026-10-26
 

@@ -305,13 +305,21 @@ export interface PresetList {
   problems: string[];
 }
 
-/* ---------- batch: every negative × every print ---------- */
+/* ---------- batch: every negative × every print, plus full LUTs ---------- */
 
-export type Stage = "negative" | "print";
+export type Stage = "negative" | "print" | "full";
+/** What a LUT measured as (DECISIONS D37). */
+export interface StageMeasure {
+  stage: Stage;
+  slope: number;
+  per_stop: boolean;
+  reason: string;
+}
 export interface StockNames {
   looks: Record<string, string>;
   variants: Record<string, string>;
   flags: Record<string, string>;
+  negatives: Record<string, string>;
 }
 export interface BatchItem {
   id: number;
@@ -323,6 +331,8 @@ export interface BatchItem {
   input: InputSpace;
   output: OutputSpace;
   include: boolean;
+  measured: StageMeasure;
+  auto_name: string;
   variant: string | null;
   variant_word: string | null;
   flags: string[];
@@ -339,6 +349,8 @@ export interface PairSummary {
   name: string;
   negative: string;
   print: string;
+  /** A full LUT matched on its own (`print` is its name, `negative` is empty). */
+  full: boolean;
   check: PairCheck;
   error: string | null;
   metric: string | null;

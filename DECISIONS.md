@@ -453,3 +453,28 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - First real run (5201 pull 2 negative × DLook prints, Rec.709 2.4): 18% gray lands at
   11–15 nits for every print, confirming `AWG4LC4_to_5201_pull2` is a negative and the
   DLooks take Cineon film log. About 6 s per pair; fitted ΔE2000 2.1–3.8.
+
+## D37 — Measured stages, full LUTs, naming rules (user request 2026-10-27)
+- **Every LUT is measured** to find its stage; file names no longer decide it. If the
+  detected camera space is at least Medium confidence, 18% scene gray is swept −10…+10
+  stops through the input encoding and the output's rise per stop is taken where the
+  output mean crosses code 0.42 (the mid-tones): below 0.115 code per stop it is
+  log → log, a **negative**; above, it is camera log → display, a **full** LUT. Log
+  encodings rise 0.06–0.10 per stop (LogC3 0.071, Cineon-style negatives ~0.09); display
+  outputs 0.13 or more. If the camera space is unknown (film log in), the slope of output
+  code against input code along the neutral axis is used: below 1.4 a negative, above a
+  **print**. On the user's LUTs: negatives 0.071–0.092 per stop; full LUTs 0.141–0.215;
+  prints slope 1.70–2.66 (softest: 2395 and LoCon 50, 1.70). The user can move any LUT to
+  another list; the app keeps showing what it measured as.
+- **Full LUTs** (camera log → display, e.g. `LogC34_DLook4…`, which is the FilmLog input
+  transform baked in front of a DLook print) are matched on their own after the pairs,
+  never stacked with a negative. Their check is just where 18% gray lands.
+- **Names.** Negatives: a `negatives` prefix table, else stock number + pull/push, else
+  `FilmLog` for any FilmLog transform (`LogC33`/`LogC34`/`34FilmLog` are all FilmLog to
+  the user). Full LUTs: `[33X_]LogC33_`/`LogC34_` + print → `FilmLog_<print name>` (or the
+  look code before `_To_`/`_Profile` when the table doesn't know it); a negative stock and
+  a print stock in the name → `5207pull2_2393`; else the table; else the file name.
+  A white move in a print's name (`D55toD58_Bradford`) appends `_D58`.
+- **Repeated names get letters**, not an error: every member of a repeated name gets a, b,
+  c… in list order (z, then aa, ab…), within each list and again across all result names
+  of a run. Hand-typed names are kept as typed (the run-level pass still letters them).

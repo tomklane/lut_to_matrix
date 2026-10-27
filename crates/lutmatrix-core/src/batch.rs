@@ -2,13 +2,15 @@
 //!
 //! Each pair is stacked ([`Stack`]: negative, then print, as two LUT nodes), checked for a
 //! plausible pairing, and matched with [`match_opendrt`] using the shared settings. The
-//! pair is named `negative_print` from film stocks only ([`crate::film`]).
+//! pair is named `negative_print` from film stocks only ([`crate::film`]). Full LUTs
+//! (camera log → display) are matched on their own, not stacked (D37). Result names
+//! that would repeat get a, b, c….
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::film::{pair_name, Stack};
+use crate::film::{dedupe, pair_name, Stack};
 use crate::lut::{Interpolation, Lut, Transform};
 use crate::math::whites;
 use crate::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
@@ -31,6 +33,16 @@ pub struct Print {
     pub file: String,
     pub lut: Lut,
     /// The display the print LUT renders to (the stack's output).
+    pub output: OutputSpace,
+}
+
+/// A full LUT: camera log in, display out; matched on its own.
+#[derive(Debug, Clone)]
+pub struct Full {
+    pub name: String,
+    pub file: String,
+    pub lut: Lut,
+    pub input: InputSpace,
     pub output: OutputSpace,
 }
 
@@ -69,6 +81,9 @@ pub struct PairResult {
     pub result: Option<OpenDrtMatch>,
     /// Why there is no fit.
     pub error: Option<String>,
+    /// A full LUT matched on its own (`negative` is empty, `print` is its name).
+    #[serde(default)]
+    pub full: bool,
 }
 
 /// Run each LUT of a pair in order.
@@ -82,6 +97,7 @@ pub fn check_pair(negative: &Negative, print: &Print, interp: Interpolation) -> 
     let gray = whites::D65.to_xyz() * 0.18;
     let code = negative.input.encode(&(negative.input.xyz_d65_to_rgb() * gray));
     let gray_nits = (print.output.rgb_to_xyz() * print.output.decode(&s.apply_rgb(&code, interp))).y;
+    let problems = gray_problem(gray_nits, &print.output).into_iter().collect::<Vec<_>>();
     let (lo, hi) = print.lut.input_domain();
     let print_in = (lo.iter().cloned().fold(f64::INFINITY, f64::min), hi.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
     // Realistic scene colours, not the table's corners (out-of-gamut codes no camera makes).
@@ -112,19 +128,7 @@ pub fn check_pair(negative: &Negative, print: &Print, interp: Interpolation) -> 
         }
     }
     let outside_percent = 100.0 * outside as f64 / used.max(1) as f64;
-    let mut problems = Vec::new();
-    let peak = match print.output.transfer {
-        crate::spaces::DisplayTransfer::Pq { .. } => 150.0,
-        _ => print.output.peak_nits(),
-    };
-    if !(GRAY_MIN_FRACTION * peak..=GRAY_MAX_FRACTION * peak).contains(&gray_nits) {
-        problems.push(format!(
-            "18% gray comes out at {gray_nits:.2} nits (expected about {:.0}–{:.0}); the negative and print \
-             may not share the same in-between encoding, or the negative's input space is wrong",
-            GRAY_MIN_FRACTION * peak,
-            GRAY_MAX_FRACTION * peak
-        ));
-    }
+    let mut problems = problems;
     if outside_percent > 5.0 {
         problems.push(format!(
             "{outside_percent:.0}% of realistic colours leave the print's input range ({:.3}–{:.3}; the negative \
@@ -133,6 +137,31 @@ pub fn check_pair(negative: &Negative, print: &Print, interp: Interpolation) -> 
         ));
     }
     PairCheck { gray_nits, negative_out, print_in, outside_percent, ok: problems.is_empty(), problems }
+}
+
+/// A note if 18% gray lands far from a normal display level.
+fn gray_problem(gray_nits: f64, output: &OutputSpace) -> Option<String> {
+    let peak = match output.transfer {
+        crate::spaces::DisplayTransfer::Pq { .. } => 150.0,
+        _ => output.peak_nits(),
+    };
+    (!(GRAY_MIN_FRACTION * peak..=GRAY_MAX_FRACTION * peak).contains(&gray_nits)).then(|| {
+        format!(
+            "18% gray comes out at {gray_nits:.2} nits (expected about {:.0}–{:.0}); the stages may not share \
+             the same in-between encoding, or the input space is wrong",
+            GRAY_MIN_FRACTION * peak,
+            GRAY_MAX_FRACTION * peak
+        )
+    })
+}
+
+/// The same check for a full LUT on its own (where its 18% gray lands).
+pub fn check_full(full: &Full, interp: Interpolation) -> PairCheck {
+    let gray = whites::D65.to_xyz() * 0.18;
+    let code = full.input.encode(&(full.input.xyz_d65_to_rgb() * gray));
+    let gray_nits = (full.output.rgb_to_xyz() * full.output.decode(&full.lut.apply(&code, interp))).y;
+    let problems: Vec<String> = gray_problem(gray_nits, &full.output).into_iter().collect();
+    PairCheck { gray_nits, negative_out: (0.0, 0.0), print_in: (0.0, 0.0), outside_percent: 0.0, ok: problems.is_empty(), problems }
 }
 
 /// Options for [`run`].
@@ -145,24 +174,36 @@ pub struct BatchOptions {
     pub check_only: bool,
 }
 
+/// The result names of a batch, in run order: every negative × every print, then the
+/// full LUTs; names that would repeat get a, b, c….
+pub fn job_names(negatives: &[Negative], prints: &[Print], fulls: &[Full]) -> Vec<String> {
+    let mut names: Vec<String> = negatives.iter().flat_map(|n| prints.iter().map(move |p| pair_name(&n.name, &p.name))).collect();
+    names.extend(fulls.iter().map(|f| f.name.clone()));
+    dedupe(&mut names);
+    names
+}
+
 /// Every negative × every print, in that order (all prints for the first negative,
-/// then the next). `on_pair(done, total, result)` is called as each pair finishes;
-/// setting `cancel` stops before the next pair.
+/// then the next), then every full LUT on its own. `on_pair(done, total, result)` is
+/// called as each finishes; setting `cancel` stops before the next.
 pub fn run(
     negatives: &[Negative],
     prints: &[Print],
+    fulls: &[Full],
     options: &BatchOptions,
     cancel: &AtomicBool,
     mut on_pair: impl FnMut(usize, usize, &PairResult),
 ) -> Vec<PairResult> {
-    let total = negatives.len() * prints.len();
+    let names = job_names(negatives, prints, fulls);
+    let total = names.len();
     let mut out = Vec::with_capacity(total);
+    let mut names = names.into_iter();
     for n in negatives {
         for p in prints {
             if cancel.load(Ordering::Relaxed) {
                 return out;
             }
-            let name = pair_name(&n.name, &p.name);
+            let name = names.next().expect("one name per job");
             let check = check_pair(n, p, options.settings.interpolation);
             let (result, error) = if options.check_only {
                 (None, None)
@@ -183,10 +224,41 @@ pub fn run(
                 check,
                 result,
                 error,
+                full: false,
             };
             on_pair(out.len() + 1, total, &r);
             out.push(r);
         }
+    }
+    for f in fulls {
+        if cancel.load(Ordering::Relaxed) {
+            return out;
+        }
+        let name = names.next().expect("one name per job");
+        let check = check_full(f, options.settings.interpolation);
+        let (result, error) = if options.check_only {
+            (None, None)
+        } else if !check.ok && !options.fit_mismatched {
+            (None, Some(format!("skipped: {}", check.problems.join("; "))))
+        } else {
+            match match_opendrt(&f.lut, Some(name.clone()), f.input, f.output, &options.settings) {
+                Ok(m) => (Some(m), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
+        };
+        let r = PairResult {
+            name,
+            negative: String::new(),
+            print: f.name.clone(),
+            negative_file: String::new(),
+            print_file: f.file.clone(),
+            check,
+            result,
+            error,
+            full: true,
+        };
+        on_pair(out.len() + 1, total, &r);
+        out.push(r);
     }
     out
 }
@@ -262,18 +334,36 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let opts = BatchOptions { check_only: true, ..BatchOptions::default() };
         let mut seen = Vec::new();
-        let r = run(&[n.clone(), dark], std::slice::from_ref(&p), &opts, &cancel, |d, t, r| seen.push((d, t, r.name.clone())));
-        assert_eq!(seen, vec![(1, 2, "5219_2383v1_Native".to_string()), (2, 2, "5219_2383v1_Native".to_string())]);
+        let r = run(&[n.clone(), dark], std::slice::from_ref(&p), &[], &opts, &cancel, |d, t, r| seen.push((d, t, r.name.clone())));
+        assert_eq!(
+            seen,
+            vec![(1, 2, "5219_2383v1_Nativea".to_string()), (2, 2, "5219_2383v1_Nativeb".to_string())],
+            "same name twice → a, b"
+        );
         assert!(r.iter().all(|r| r.result.is_none() && r.error.is_none()));
         assert!(csv(&r).lines().count() == 3);
 
         // Mismatched pairs are skipped (not fitted) unless asked.
         let opts = BatchOptions::default();
         let (dark, _) = pair(0.3);
-        let r = run(&[dark], &[p], &opts, &cancel, |_, _, _| {});
+        let r = run(&[dark], std::slice::from_ref(&p), &[], &opts, &cancel, |_, _, _| {});
         assert!(r[0].error.as_deref().unwrap().starts_with("skipped"));
 
         cancel.store(true, Ordering::Relaxed);
-        assert!(run(&[n], &[p2], &opts, &cancel, |_, _, _| {}).is_empty(), "cancelled before the first pair");
+        // A full LUT runs on its own, after the pairs, named as given.
+        cancel.store(false, Ordering::Relaxed);
+        let full = Full {
+            name: "FilmLog_2383v1_Native".into(),
+            file: "LogC34_x.dat".into(),
+            lut: p.lut.clone(),
+            input: n.input,
+            output: p.output,
+        };
+        let co = BatchOptions { check_only: true, ..BatchOptions::default() };
+        let r = run(std::slice::from_ref(&n), std::slice::from_ref(&p), std::slice::from_ref(&full), &co, &cancel, |_, _, _| {});
+        assert_eq!(r.len(), 2);
+        assert!(r[1].full && r[1].name == "FilmLog_2383v1_Native" && r[1].negative.is_empty());
+        cancel.store(true, Ordering::Relaxed);
+        assert!(run(&[n], &[p2], &[], &opts, &cancel, |_, _, _| {}).is_empty(), "cancelled before the first pair");
     }
 }

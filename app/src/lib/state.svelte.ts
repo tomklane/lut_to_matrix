@@ -107,7 +107,7 @@ class AppState {
     });
   }
 
-  async addToBatch(paths: string[], stage: "negative" | "print" | null = null) {
+  async addToBatch(paths: string[], stage: "negative" | "print" | "full" | null = null) {
     const luts = paths.filter((p) => /\.(cube|3dl|dat)$/i.test(p));
     if (!luts.length) {
       this.notify("Drop .cube, .3dl or .dat LUTs", "error");

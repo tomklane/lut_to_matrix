@@ -8,9 +8,17 @@
   const b = $derived(app.batch);
   const negatives = $derived(b?.items.filter((i) => i.stage === "negative") ?? []);
   const prints = $derived(b?.items.filter((i) => i.stage === "print") ?? []);
+  const fulls = $derived(b?.items.filter((i) => i.stage === "full") ?? []);
   const nNeg = $derived(negatives.filter((i) => i.include).length);
   const nPrint = $derived(prints.filter((i) => i.include).length);
+  const nFull = $derived(fulls.filter((i) => i.include).length);
   const pairs = $derived(nNeg * nPrint);
+  /** Pairs plus full LUTs: what a run matches. */
+  const jobs = $derived(pairs + nFull);
+  const goLabel = $derived(
+    nFull && pairs ? `Match all ${jobs}` : nFull ? `Match ${nFull} LUT${nFull === 1 ? "" : "s"}` : `Match ${pairs} pair${pairs === 1 ? "" : "s"}`,
+  );
+  const stageWords: Record<Stage, string> = { negative: "negative", print: "print", full: "full LUT" };
   const running = $derived(!!app.batchProgress);
 
   /* ---------- the lists ---------- */
@@ -54,26 +62,30 @@
   }
 
   function spaceLabel(i: BatchItem) {
-    return i.stage === "negative"
-      ? cameraName(i.input, app.catalog)
-      : `${gamutLabel(i.output.gamut, app.catalog)} · ${transferLabel(i.output)}`;
+    const out = `${gamutLabel(i.output.gamut, app.catalog)} · ${transferLabel(i.output)}`;
+    if (i.stage === "negative") return cameraName(i.input, app.catalog);
+    if (i.stage === "full") return `${cameraName(i.input, app.catalog)} → ${out}`;
+    return out;
   }
 
   /* ---------- stock names ---------- */
 
   let showNames = $state(false);
   type Row = [string, string];
-  let names = $state<{ looks: Row[]; variants: Row[]; flags: Row[] }>({ looks: [], variants: [], flags: [] });
-  const tables: { key: "looks" | "variants" | "flags"; title: string; sub: string; ph: Row }[] = [
+  type TableKey = "looks" | "variants" | "flags" | "negatives";
+  let names = $state<Record<TableKey, Row[]>>({ looks: [], variants: [], flags: [], negatives: [] });
+  const tables: { key: TableKey; title: string; sub: string; ph: Row }[] = [
     { key: "looks", title: "Looks", sub: "Look code at the start of a print's file name → stock name", ph: ["DLook4", "2383v1"] },
     { key: "variants", title: "Variants", sub: "Code after the look's dash → word", ph: ["N", "D60"] },
     { key: "flags", title: "Flags", sub: "Code after the variant → word", ph: ["gn", "Neutralized"] },
+    { key: "negatives", title: "Negatives", sub: "Start of a negative's file name → name (when the stock number isn't in it)", ph: ["k8Film5219", "5219k8"] },
   ];
   function toRows(s: StockNames) {
     return {
       looks: Object.entries(s.looks) as Row[],
       variants: Object.entries(s.variants) as Row[],
       flags: Object.entries(s.flags) as Row[],
+      negatives: Object.entries(s.negatives ?? {}) as Row[],
     };
   }
   async function openNames() {
@@ -83,7 +95,12 @@
   async function saveNames() {
     const obj = (rows: Row[]) => Object.fromEntries(rows.filter(([k, v]) => k.trim() && v.trim()).map(([k, v]) => [k.trim(), v.trim()]));
     try {
-      app.batch = await api.stockNamesSet({ looks: obj(names.looks), variants: obj(names.variants), flags: obj(names.flags) });
+      app.batch = await api.stockNamesSet({
+        looks: obj(names.looks),
+        variants: obj(names.variants),
+        flags: obj(names.flags),
+        negatives: obj(names.negatives),
+      });
       app.notify("Stock names saved; LUT names updated");
     } catch (e) {
       app.notify(String(e), "error");
@@ -129,7 +146,7 @@
 
   async function run(checkOnly: boolean) {
     if (running) return;
-    app.batchProgress = { done: 0, total: pairs, started: Date.now(), last: "" };
+    app.batchProgress = { done: 0, total: jobs, started: Date.now(), last: "" };
     if (app.batch) app.batch.results = [];
     selected = new Set();
     try {
@@ -138,7 +155,7 @@
         check_only: checkOnly,
         fit_mismatched: app.batchFitMismatched,
       });
-      if (!checkOnly) app.notify(`Batch finished: ${app.batch.results.filter((r) => r.fitted !== null).length} pair(s) fitted`);
+      if (!checkOnly) app.notify(`Batch finished: ${app.batch.results.filter((r) => r.fitted !== null).length} fitted`);
     } catch (e) {
       app.notify(String(e), "error");
       app.batch = await api.batchState();
@@ -221,11 +238,12 @@
   <p class="intro muted">
     Add negative LUTs (camera log → film negative) and print LUTs (film negative → display). Every ticked negative is stacked
     with every ticked print, as two LUT nodes in Resolve, and OpenDRT is matched to each pair. Pairs are named
-    <span class="mono">negative_print</span> from their film stocks.
+    <span class="mono">negative_print</span> from their film stocks. Full LUTs (camera log → display) are matched on their own.
+    Each LUT is measured and sorted into its list; names that would repeat get a, b, c….
   </p>
 
   <div class="cols">
-    {#each [{ stage: "negative" as Stage, title: "Negatives", list: negatives, n: nNeg }, { stage: "print" as Stage, title: "Prints", list: prints, n: nPrint }] as col (col.stage)}
+    {#each [{ stage: "negative" as Stage, title: "Negatives", list: negatives, n: nNeg }, { stage: "print" as Stage, title: "Prints", list: prints, n: nPrint }, { stage: "full" as Stage, title: "Full LUTs", list: fulls, n: nFull }] as col (col.stage)}
       <div class="col">
         <div class="col-head">
           <div class="group-title">{col.title} <span class="faint">{col.n}/{col.list.length} ticked</span></div>
@@ -269,19 +287,31 @@
                   </button>
                 {/if}
                 <div class="sub" title={i.path}>{i.file} · {spaceLabel(i)}</div>
+                <div class="sub measured" class:bad={i.measured.stage !== i.stage} title={i.measured.reason}>
+                  {#if i.measured.stage !== i.stage}<Icon name="warn" size={11} />{/if}
+                  <span class="ell"
+                    >{i.measured.stage !== i.stage ? `Measures as a ${stageWords[i.measured.stage]}: ` : "Measured: "}{i.measured.reason}</span
+                  >
+                </div>
               </div>
               <div class="acts">
-                <button
-                  class="icon-btn"
-                  title="Move to {i.stage === 'negative' ? 'Prints' : 'Negatives'}"
-                  onclick={() => update([{ id: i.id, stage: i.stage === "negative" ? "print" : "negative" }])}
-                  disabled={running}><Icon name="swap" size={14} /></button
+                <select
+                  class="stage-pick"
+                  value={i.stage}
+                  onchange={(e) => update([{ id: i.id, stage: e.currentTarget.value as Stage }])}
+                  title="Which list this LUT is in"
+                  aria-label="Stage of {i.name}"
+                  disabled={running}
                 >
+                  <option value="negative">Negative</option>
+                  <option value="print">Print</option>
+                  <option value="full">Full</option>
+                </select>
                 <button class="icon-btn" title="Remove" onclick={() => remove([i.id])} disabled={running}><Icon name="x" size={14} /></button>
               </div>
             </div>
           {:else}
-            <div class="row empty faint">Drop {col.stage === "negative" ? "negative" : "print"} LUTs anywhere in this window, or use Add…</div>
+            <div class="row empty faint">Drop LUTs anywhere in this window (each is measured and sorted), or use Add…</div>
           {/each}
         </div>
       </div>
@@ -291,9 +321,12 @@
   <div class="group-title">Stock names</div>
   <div class="group">
     <div class="row">
-      <div class="label">
+      <div class="label" style="flex: 1 1 auto; min-width: 0">
         Print names from your stock-names table
-        <div class="sub">e.g. DLook4-N_gn_V2 → 2383v1_D60_Neutralized_V2. Negatives are named from the stock number and pull/push in their file names.</div>
+        <div class="sub">
+          e.g. DLook4-N_gn_V2 → 2383v1_D60_Neutralized_V2 (a white move D55toD58 adds _D58). Negatives are named from the stock number and
+          pull/push in their file names, or FilmLog; full LogC33_/LogC34_ LUTs become FilmLog_ + the print name.
+        </div>
       </div>
       <div class="value"><button class="btn" onclick={openNames}>{showNames ? "Close" : "Edit…"}</button></div>
     </div>
@@ -343,15 +376,21 @@
         <div class="progress">
           <div class="track"><div class="fill" style="width:{p.total ? (100 * p.done) / p.total : 0}%"></div></div>
           <div class="sub num">
-            {`${p.done} of ${p.total} pairs`}{p.last ? ` · last: ${p.last}` : ""}{remaining !== null ? ` · about ${duration(remaining)} left` : ""}
+            {`${p.done} of ${p.total}`}{p.last ? ` · last: ${p.last}` : ""}{remaining !== null ? ` · about ${duration(remaining)} left` : ""}
           </div>
         </div>
         <button class="btn" onclick={() => api.batchCancel()}><Icon name="stop" size={13} /> Stop</button>
       {:else}
-        <span class="muted">{pairs} pair{pairs === 1 ? "" : "s"}{pairs ? ` · about ${duration(pairs * perPair)}` : ""}</span>
+        <span class="muted"
+          >{pairs} pair{pairs === 1 ? "" : "s"}{nFull ? ` + ${nFull} full LUT${nFull === 1 ? "" : "s"}` : ""}{jobs
+            ? ` · about ${duration(jobs * perPair)}`
+            : ""}</span
+        >
         <span class="grow"></span>
-        <button class="btn" onclick={() => run(true)} disabled={!pairs}>Check pairs</button>
-        <button class="btn primary large" onclick={() => run(false)} disabled={!pairs}><Icon name="play" size={14} /> Match {pairs} pair{pairs === 1 ? "" : "s"}</button>
+        <button class="btn" onclick={() => run(true)} disabled={!jobs}>Check</button>
+        <button class="btn primary large" onclick={() => run(false)} disabled={!jobs}
+          ><Icon name="play" size={14} /> {goLabel}</button
+        >
       {/if}
     </div>
   </div>
@@ -359,7 +398,7 @@
   {#if results.length}
     <div class="res-head">
       <div class="group-title">
-        Results — {results.length} pair{results.length === 1 ? "" : "s"}{fittedCount ? `, ${fittedCount} fitted` : ""}
+        Results — {results.length}{fittedCount ? `, ${fittedCount} fitted` : ""}
         {#if checkOnlyResults}<span class="faint">(check only)</span>{/if}
       </div>
       {#if fittedCount}
@@ -373,7 +412,7 @@
     <div class="table">
       <div class="tr th">
         <span></span>
-        <button onclick={() => sortBy("name")}>Pair{sortKey === "name" ? (sortUp ? " ↑" : " ↓") : ""}</button>
+        <button onclick={() => sortBy("name")}>Name{sortKey === "name" ? (sortUp ? " ↑" : " ↓") : ""}</button>
         <button onclick={() => sortBy("fitted")}>Fitted ΔE{sortKey === "fitted" ? (sortUp ? " ↑" : " ↓") : ""}</button>
         <button onclick={() => sortBy("gray")}>Gray axis{sortKey === "gray" ? (sortUp ? " ↑" : " ↓") : ""}</button>
         <button onclick={() => sortBy("stock")}>Stock{sortKey === "stock" ? (sortUp ? " ↑" : " ↓") : ""}</button>
@@ -389,7 +428,7 @@
           </span>
           <button class="pair" onclick={() => (open = open === r.name ? null : r.name)}>
             <Icon name="chevron" size={11} />
-            <span class="mono">{r.name}</span>
+            <span class="mono">{r.name}</span>{#if r.full}<span class="tag">full</span>{/if}
           </button>
           <span class="num">
             {#if r.fitted !== null}
@@ -414,11 +453,16 @@
         </div>
         {#if open === r.name}
           <div class="detail fade-in">
-            <div><span class="faint">Negative</span> {r.negative} · <span class="faint">Print</span> {r.print}</div>
-            <div>
-              <span class="faint">Pair check</span> 18% gray → {fmt(r.check.gray_nits, 2)} nits; {fmt(r.check.outside_percent, 1)}% of displayable
-              colours clipped between the stages
-            </div>
+            {#if r.full}
+              <div><span class="faint">Full LUT</span> {r.print}, matched on its own</div>
+              <div><span class="faint">Check</span> 18% gray → {fmt(r.check.gray_nits, 2)} nits</div>
+            {:else}
+              <div><span class="faint">Negative</span> {r.negative} · <span class="faint">Print</span> {r.print}</div>
+              <div>
+                <span class="faint">Pair check</span> 18% gray → {fmt(r.check.gray_nits, 2)} nits; {fmt(r.check.outside_percent, 1)}% of displayable
+                colours clipped between the stages
+              </div>
+            {/if}
             {#each r.check.problems as pr}<div class="bad">{pr}</div>{/each}
             {#if r.error}<div class="bad">{r.error}</div>{/if}
             {#if r.fitted !== null}
@@ -441,7 +485,7 @@
 
 <style>
   .page {
-    max-width: 1100px;
+    max-width: 1320px;
     padding: 20px 24px 40px;
   }
   .intro {
@@ -454,9 +498,14 @@
   }
   .cols {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 18px;
     margin-bottom: 20px;
+  }
+  @media (max-width: 1200px) {
+    .cols {
+      grid-template-columns: 1fr 1fr;
+    }
   }
   @media (max-width: 900px) {
     .cols {
@@ -465,6 +514,30 @@
   }
   .col {
     min-width: 0;
+  }
+  .measured {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    min-width: 0;
+  }
+  .ell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .stage-pick {
+    font-size: 12px;
+    min-width: 92px;
+  }
+  .tag {
+    margin-left: 6px;
+    font-size: 10.5px;
+    padding: 0 5px;
+    border-radius: 4px;
+    border: 1px solid var(--border, currentColor);
+    opacity: 0.75;
   }
   .col-head {
     display: flex;

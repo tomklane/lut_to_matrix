@@ -9,9 +9,15 @@
 //! - negative: the camera stock number from the file name plus any pull/push
 //!   (`AWG4LC4_to_5201_pull2.cube` → `5201pull2`);
 //! - print: from the user's [`StockNames`] table, which maps look codes and profile
-//!   variants to words (`DLook4-N_gn_V2_…` → `2383v1_D60_Neutralized_V2`).
+//!   variants to words (`DLook4-N_gn_V2_…` → `2383v1_D60_Neutralized_V2`); a creative
+//!   white move `DxxtoDyy_Bradford` adds `_Dyy`.
 //!   The table is the user's (it describes their LUT pack), so it lives in their data
 //!   folder, not in the app.
+//! - negatives without a stock number that write film log (Deluxe FilmLog 33/34
+//!   input transforms) are `FilmLog`.
+//! - full LUTs (camera log → display) are named on their own: `LogC34_<print>` is
+//!   `FilmLog_<print>`.
+//! - names that come out the same get a, b, c… ([`dedupe`]).
 
 use std::collections::BTreeMap;
 
@@ -53,6 +59,23 @@ pub struct StockNames {
     pub variants: BTreeMap<String, String>,
     /// The flag after the variant (`_gn`) and its word, e.g. "gn" → "Neutralized".
     pub flags: BTreeMap<String, String>,
+    /// Negative file-name prefix → name, for negatives the built-in rules don't cover.
+    pub negatives: BTreeMap<String, String>,
+}
+
+/// The longest key of `table` that starts `stem` as a whole word (case-insensitive).
+fn prefix_match<'a>(table: &'a BTreeMap<String, String>, stem: &str) -> Option<(&'a String, &'a String)> {
+    let lower = stem.to_ascii_lowercase();
+    let mut keys: Vec<_> = table.iter().collect();
+    keys.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
+    keys.into_iter().find(|(k, _)| {
+        let k = k.to_ascii_lowercase();
+        lower.starts_with(&k) && lower[k.len()..].chars().next().map_or(true, |c| !c.is_ascii_alphanumeric())
+    })
+}
+
+fn stem_of(file_name: &str) -> &str {
+    file_name.rsplit_once('.').map_or(file_name, |(a, _)| a)
 }
 
 /// What the name of a print file says.
@@ -88,15 +111,9 @@ impl StockNames {
     /// The name of a print LUT from its file name; `None` if no look code matches (the
     /// caller falls back to the file name, and the user can rename).
     pub fn print_name(&self, file_name: &str) -> Option<PrintName> {
-        let stem = file_name.rsplit_once('.').map_or(file_name, |(a, _)| a);
-        let lower = stem.to_ascii_lowercase();
+        let stem = stem_of(file_name);
         // Longest code first, so "DLook10" wins over "DLook1".
-        let mut looks: Vec<_> = self.looks.iter().collect();
-        looks.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
-        let (code, stock) = looks.into_iter().find(|(k, _)| {
-            let k = k.to_ascii_lowercase();
-            lower.starts_with(&k) && lower[k.len()..].chars().next().map_or(true, |c| !c.is_ascii_alphanumeric())
-        })?;
+        let (code, stock) = prefix_match(&self.looks, stem)?;
         let rest = &stem[code.len()..];
         let mut parts = vec![stock.clone()];
         let mut variant = None;
@@ -125,8 +142,96 @@ impl StockNames {
                 }
             }
         }
+        // A creative white moved with Bradford: "D55toD58_Bradford" → "D58".
+        if let Some(c) = white_move_re().captures(stem) {
+            parts.push(format!("D{}", &c[1]));
+        }
         Some(PrintName { name: parts.join("_"), look: code.clone(), variant, flags, revision })
     }
+
+    /// The name of a negative: a table entry, else the camera stock number and pull/push
+    /// ("5201pull2"), else "FilmLog" for a film-log transform without a stock.
+    pub fn negative_name(&self, file_name: &str) -> Option<String> {
+        let stem = stem_of(file_name);
+        if let Some((_, n)) = prefix_match(&self.negatives, stem) {
+            return Some(n.clone());
+        }
+        negative_name(file_name).or_else(|| stem.to_ascii_lowercase().contains("filmlog").then(|| "FilmLog".to_string()))
+    }
+
+    /// The name of a full LUT (camera log → display), matched on its own:
+    /// - `[33X_]LogC33_` / `LogC34_` + a print → `FilmLog_<print name>` (they are the
+    ///   FilmLog input transform baked in front of that print);
+    /// - a negative stock and a print stock in the name (`…5207_pull2_K2393…`) →
+    ///   `5207pull2_2393`;
+    /// - else the stock-names table, if it knows the file.
+    pub fn full_name(&self, file_name: &str) -> Option<String> {
+        let stem = stem_of(file_name);
+        if let Some(c) = logc_film_re().captures(stem) {
+            let rest = &stem[c.get(0).unwrap().end()..];
+            let print = self.print_name(rest).map(|p| p.name).unwrap_or_else(|| {
+                let lower = rest.to_ascii_lowercase();
+                let end = ["_to_", "_profile"].iter().filter_map(|t| lower.find(t)).min().unwrap_or(rest.len());
+                rest[..end].to_string()
+            });
+            return Some(format!("FilmLog_{print}"));
+        }
+        if let (Some(n), Some(p)) = (negative_name(file_name), print_stock_re().captures(stem)) {
+            return Some(format!("{n}_{}", &p[1]));
+        }
+        self.print_name(file_name).map(|p| p.name)
+    }
+
+    /// The automatic name for a LUT at `stage` (the file name if no rule applies).
+    pub fn name_for(&self, stage: Stage, file_name: &str) -> String {
+        match stage {
+            Stage::Negative => self.negative_name(file_name),
+            Stage::Print => self.print_name(file_name).map(|p| p.name),
+            Stage::Full => self.full_name(file_name),
+        }
+        .unwrap_or_else(|| stem_of(file_name).to_string())
+    }
+}
+
+/// Names that come out the same get a lowercase letter each, in order: a, b, c … z,
+/// aa, ab … ("5219JBs1" ×2 → "5219JBs1a", "5219JBs1b"). Unique names are left alone.
+pub fn dedupe(names: &mut [String]) {
+    let mut count = std::collections::HashMap::new();
+    for n in names.iter() {
+        *count.entry(n.clone()).or_insert(0usize) += 1;
+    }
+    let mut seen = std::collections::HashMap::new();
+    for n in names.iter_mut() {
+        if count[n.as_str()] > 1 {
+            let k = seen.entry(n.clone()).or_insert(0usize);
+            let mut i = *k;
+            *k += 1;
+            let mut tag = String::new();
+            loop {
+                tag.insert(0, (b'a' + (i % 26) as u8) as char);
+                if i < 26 {
+                    break;
+                }
+                i = i / 26 - 1;
+            }
+            n.push_str(&tag);
+        }
+    }
+}
+
+fn white_move_re() -> &'static Regex {
+    static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)D\d{2}toD(\d{2})_?Bradford").unwrap())
+}
+
+fn logc_film_re() -> &'static Regex {
+    static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)^(?:\d+X_)?LogC3[34]_").unwrap())
+}
+
+fn print_stock_re() -> &'static Regex {
+    static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?:^|[^0-9])(2383|2393|2395|3513|3514|3521|3523)(?:[^0-9]|$)").unwrap())
 }
 
 fn revision_re() -> &'static Regex {
@@ -154,25 +259,89 @@ pub fn negative_name(file_name: &str) -> Option<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
+    /// Camera log → film negative (film log out).
     Negative,
+    /// Film negative → display.
     Print,
+    /// Camera log → display: already a whole pipeline; matched on its own, not stacked.
+    Full,
 }
 
-/// A guess from the file name: a print if the stock-names table knows it or the name
-/// mentions printing (film log in, a print stock number); otherwise a negative. The user
-/// can move a LUT to the other list.
-pub fn guess_stage(file_name: &str, names: &StockNames) -> Stage {
-    if names.print_name(file_name).is_some() {
-        return Stage::Print;
-    }
-    let squashed: String = file_name.to_ascii_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    const PRINT: [&str; 12] =
-        ["print", "filmlog", "cineon", "dlook", "2383", "2393", "2395", "3513", "3514", "3521", "3523", "cp30"];
-    if PRINT.iter().any(|k| squashed.contains(k)) && negative_name(file_name).is_none() {
-        Stage::Print
+/// The stage of a LUT, measured (DECISIONS.md D37), and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageMeasure {
+    pub stage: Stage,
+    /// How fast the output rises through the mid-tones (where it passes code 0.42):
+    /// output code per stop of exposure when the input camera space is known, else
+    /// output code per input code.
+    pub slope: f64,
+    /// `slope` is per stop (the input space is known).
+    pub per_stop: bool,
+    pub reason: String,
+}
+
+/// Output code per stop below which a LUT is log → log (a negative). Log encodings run
+/// at 0.06–0.10 per stop (LogC3 0.071, Cineon-style negatives ~0.09); display outputs
+/// at 0.13 or more through the mid-tones.
+pub const NEGATIVE_PER_STOP: f64 = 0.115;
+/// The same test when the input space is unknown: output code per input code.
+pub const NEGATIVE_SLOPE: f64 = 1.4;
+
+/// Measure what stage a LUT is:
+/// 1. **Camera space in?** From the name or header (medium or high confidence: "LogC",
+///    "AWG", "ACES2065"…). If so, scene gray is swept −10…+10 stops through it;
+///    otherwise the neutral axis of the input code is swept.
+/// 2. **Log or display out?** Where the output passes the mid-tones (code 0.42), a log
+///    output rises like a log encoding (≤ 0.115 code per stop, or ≤ 1.4 per input code); a
+///    display output two to three times faster.
+/// 3. Camera in, log out → **negative**; camera in, display out → **full**; anything
+///    else in (film log), display out → **print**.
+pub fn measure_stage(lut: &Lut) -> StageMeasure {
+    let mean = |o: Vec3| (o.x + o.y + o.z) / 3.0;
+    let d = crate::detect::detect(lut);
+    let camera = d.input.confidence >= crate::detect::Confidence::Medium;
+    // (x, output) along the ramp, x in stops (camera) or input code (unknown).
+    let ramp: Vec<(f64, f64)> = if camera {
+        let inp = d.input.value;
+        let to_cam = inp.xyz_d65_to_rgb();
+        let wn = crate::math::whites::D65.to_xyz();
+        (0..=320)
+            .filter_map(|k| {
+                let s = -10.0 + k as f64 / 16.0;
+                let code = inp.encode(&(to_cam * (wn * (0.18 * 2f64.powf(s)))));
+                lut.in_domain(&code).then(|| (s, mean(lut.apply(&code, Interpolation::Tetrahedral))))
+            })
+            .collect()
     } else {
-        Stage::Negative
-    }
+        let (lo, hi) = lut.input_domain();
+        let (lo, hi) = (lo.iter().cloned().fold(f64::NEG_INFINITY, f64::max), hi.iter().cloned().fold(f64::INFINITY, f64::min));
+        (0..=512)
+            .map(|k| {
+                let c = lo + (hi - lo) * k as f64 / 512.0;
+                (c, mean(lut.apply(&Vec3::new(c, c, c), Interpolation::Tetrahedral)))
+            })
+            .collect()
+    };
+    let span = if camera { 1.0 } else { 0.06 };
+    let slope = ramp
+        .windows(2)
+        .position(|w| w[0].1 < 0.42 && w[1].1 >= 0.42)
+        .map(|k| {
+            let x = ramp[k].0;
+            let near = |t: f64| ramp.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).copied().unwrap();
+            let (a, b) = (near(x - span / 2.0), near(x + span / 2.0));
+            (b.1 - a.1) / (b.0 - a.0).max(1e-9)
+        })
+        .unwrap_or(0.0); // never reaches the mid-tones: a dark log encoding
+    let log_out = if camera { slope < NEGATIVE_PER_STOP } else { slope < NEGATIVE_SLOPE };
+    let how = if camera { format!("{slope:.3} code per stop") } else { format!("slope {slope:.2}") };
+    let (stage, reason) = match (camera, log_out) {
+        (true, true) => (Stage::Negative, format!("{} in, log out ({how})", d.input.value.name())),
+        (true, false) => (Stage::Full, format!("{} in, display out ({how})", d.input.value.name())),
+        (false, true) => (Stage::Negative, format!("log out ({how}); input space not recognised")),
+        (false, false) => (Stage::Print, format!("film log in, display out ({how})")),
+    };
+    StageMeasure { stage, slope, per_stop: camera, reason }
 }
 
 /// The stacked pair's name, `negative_print`.
@@ -191,6 +360,7 @@ mod tests {
             looks: m(&[("DLook1", "1111"), ("DLook10", "2393v2"), ("DLook4", "2383v1")]),
             variants: m(&[("NAT", "Native"), ("N", "D60"), ("P3", "DCI"), ("U", "3514DIConstrain")]),
             flags: m(&[("gn", "Neutralized")]),
+            ..StockNames::default()
         }
     }
 
@@ -206,6 +376,33 @@ mod tests {
         assert_eq!(n.print_name("DLook10-U_Profile.dat").unwrap().name, "2393v2_3514DIConstrain");
         assert!(n.print_name("DLook42D60ToDciP3_To_Rec709.dat").is_none(), "DLook4 is not a prefix of DLook42");
         assert!(n.print_name("Other.cube").is_none());
+        assert_eq!(
+            n.print_name("DLook10-NAT_Profile_To_DciP3_2-6_G1_Og1_D55toD58_Bradford_P1_LumToZero.dat").unwrap().name,
+            "2393v2_Native_D58",
+            "creative white move"
+        );
+    }
+
+    #[test]
+    fn full_lut_names() {
+        let n = names();
+        assert_eq!(
+            n.full_name("LogC34_DLook4-N_gn_V2_Profile_To_DciP3_2-6_G1_Og1_P1_LumToZero.dat").as_deref(),
+            Some("FilmLog_2383v1_D60_Neutralized_V2")
+        );
+        assert_eq!(n.full_name("33X_LogC33_Ulook4b_To_Rec709_2-4_G1_Og1_P1_LumToZero.cube").as_deref(), Some("FilmLog_Ulook4b"));
+        assert_eq!(n.full_name("ACES2065_to_5207_pull2_K2393_D65_709G24.cube").as_deref(), Some("5207pull2_2393"));
+        assert_eq!(n.name_for(Stage::Full, "AlexaV3_K1S1_LogC2Video_Rec709_EE.cube"), "AlexaV3_K1S1_LogC2Video_Rec709_EE");
+    }
+
+    #[test]
+    fn duplicates_get_letters() {
+        let mut v: Vec<String> = ["FilmLog", "5201pull2", "FilmLog", "FilmLog"].iter().map(|s| s.to_string()).collect();
+        dedupe(&mut v);
+        assert_eq!(v, ["FilmLoga", "5201pull2", "FilmLogb", "FilmLogc"]);
+        let mut many: Vec<String> = vec!["x".into(); 28];
+        dedupe(&mut many);
+        assert_eq!((many[0].as_str(), many[25].as_str(), many[26].as_str(), many[27].as_str()), ("xa", "xz", "xaa", "xab"));
     }
 
     #[test]
@@ -217,9 +414,10 @@ mod tests {
         assert_eq!(negative_name("LogC4_to_Rec709.cube"), None, "no stock number");
         assert_eq!(pair_name("5201pull2", "2383v1_Native"), "5201pull2_2383v1_Native");
         let n = names();
-        assert_eq!(guess_stage("AWG4LC4_to_5201_pull2.cube", &n), Stage::Negative);
-        assert_eq!(guess_stage("DLook4-N_gn_V2_Profile_To_Rec709.dat", &n), Stage::Print);
-        assert_eq!(guess_stage("FilmLog_to_Kodak2383_Rec709.cube", &n), Stage::Print);
+        assert_eq!(n.negative_name("ARRILogCWG_to_34FilmLog.cube").as_deref(), Some("FilmLog"));
+        assert_eq!(n.negative_name("LogCv3ToFilmLogInput33.cube").as_deref(), Some("FilmLog"));
+        assert_eq!(n.negative_name("AWG4LC4_to_5201_pull2.cube").as_deref(), Some("5201pull2"));
+        assert_eq!(n.name_for(Stage::Negative, "Mystery.cube"), "Mystery");
     }
 
     #[test]

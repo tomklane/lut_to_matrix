@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lutmatrix_core::analysis::{analyze_with, Analysis, Reference};
-use lutmatrix_core::batch::{self, BatchOptions, Negative, PairCheck, PairResult, Print};
-use lutmatrix_core::film::{guess_stage, negative_name, Stage, StockNames};
+use lutmatrix_core::batch::{self, BatchOptions, Full, Negative, PairCheck, PairResult, Print};
 use lutmatrix_core::dctl;
 use lutmatrix_core::detect::{detect, Detection};
+use lutmatrix_core::film::{measure_stage, Stage, StageMeasure, StockNames};
 use lutmatrix_core::lut::Lut;
 use lutmatrix_core::opendrt_match::{match_opendrt, MatchSettings, OpenDrtMatch};
 use lutmatrix_core::preset_store::{data_dir, import_file, PresetStore, StoredPreset};
@@ -66,6 +66,8 @@ struct BatchItem {
     input: InputSpace,
     output: OutputSpace,
     include: bool,
+    /// What the LUT measured as (D37), whatever stage it is now set to.
+    measured: StageMeasure,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -217,12 +219,7 @@ async fn analyze(req: AnalyzeRequest, state: State<'_, AppState>) -> CmdResult<A
     let through = through.map(|(l, t)| (l, file_name(&t.path), t.input, t.output));
     let (input, output, settings, hint) = (req.input, req.output, req.settings, req.middle_gray_hint);
     let a = tauri::async_runtime::spawn_blocking(move || {
-        let r = through.as_ref().map(|(l, name, i, o)| Reference {
-            transform: l.as_ref(),
-            name: name.clone(),
-            input: *i,
-            output: *o,
-        });
+        let r = through.as_ref().map(|(l, name, i, o)| Reference { transform: l.as_ref(), name: name.clone(), input: *i, output: *o });
         analyze_with(lut.as_ref(), input, output, &settings, hint, r.as_ref())
     })
     .await
@@ -254,11 +251,9 @@ fn export_dctl(dctl_path: String, state: State<AppState>) -> CmdResult<Exported>
     let p = if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dctl")) { p } else { p.with_extension("dctl") };
     let json = p.with_extension("json");
     let txt = p.with_extension("txt");
-    for (path, body) in [
-        (&p, dctl::generate_dctl(&a.m_xyz, &meta)),
-        (&json, dctl::export_json(a, &meta)),
-        (&txt, dctl::export_text(a, &meta)),
-    ] {
+    for (path, body) in
+        [(&p, dctl::generate_dctl(&a.m_xyz, &meta)), (&json, dctl::export_json(a, &meta)), (&txt, dctl::export_text(a, &meta))]
+    {
         std::fs::write(path, body).map_err(|e| format!("could not write {}: {e}", path.display()))?;
     }
     let s = |p: &PathBuf| p.display().to_string();
@@ -271,10 +266,7 @@ fn matrix_text(state: State<AppState>) -> CmdResult<String> {
     let guard = state.analysis.lock().unwrap();
     let (_, a) = guard.as_ref().ok_or("no matrix yet")?;
     let m = &a.m_xyz;
-    Ok((0..3)
-        .map(|r| format!("{:.10} {:.10} {:.10}", m[(r, 0)], m[(r, 1)], m[(r, 2)]))
-        .collect::<Vec<_>>()
-        .join("\n"))
+    Ok((0..3).map(|r| format!("{:.10} {:.10} {:.10}", m[(r, 0)], m[(r, 1)], m[(r, 2)])).collect::<Vec<_>>().join("\n"))
 }
 
 /* ---------- preferences ---------- */
@@ -317,12 +309,10 @@ struct OdrtRequest {
 async fn opendrt_fit(req: OdrtRequest, state: State<'_, AppState>) -> CmdResult<OpenDrtMatch> {
     let lut = load_cached(&state, &req.path)?;
     let name = Some(file_name(&req.path));
-    let m = tauri::async_runtime::spawn_blocking(move || {
-        match_opendrt(lut.as_ref(), name, req.input, req.output, &req.settings)
-    })
-    .await
-    .map_err(err)?
-    .map_err(err)?;
+    let m = tauri::async_runtime::spawn_blocking(move || match_opendrt(lut.as_ref(), name, req.input, req.output, &req.settings))
+        .await
+        .map_err(err)?
+        .map_err(err)?;
     *state.odrt.lock().unwrap() = Some(m.clone());
     Ok(m)
 }
@@ -458,6 +448,10 @@ struct BatchItemView {
     input: InputSpace,
     output: OutputSpace,
     include: bool,
+    /// What the LUT measured as, and why (D37).
+    measured: StageMeasure,
+    /// The name this LUT would get from the stock names (before a hand-typed name).
+    auto_name: String,
     /// Print variant code / flags / revision from the stock-names table (for filtering).
     variant: Option<String>,
     variant_word: Option<String>,
@@ -470,6 +464,7 @@ struct PairSummary {
     name: String,
     negative: String,
     print: String,
+    full: bool,
     check: PairCheck,
     error: Option<String>,
     metric: Option<String>,
@@ -491,6 +486,7 @@ impl From<&PairResult> for PairSummary {
             name: r.name.clone(),
             negative: r.negative.clone(),
             print: r.print.clone(),
+            full: r.full,
             check: r.check.clone(),
             error: r.error.clone(),
             metric: m.map(|m| m.metric.label().to_string()),
@@ -531,8 +527,12 @@ fn restore_last(b: &mut BatchState) {
     }
     b.restored = true;
     let Ok(root) = batch_root() else { return };
-    let Ok(rd) = std::fs::read_dir(&root) else { return };
-    let Some(last) = rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.path()).max() else { return };
+    let Ok(rd) = std::fs::read_dir(&root) else {
+        return;
+    };
+    let Some(last) = rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.path()).max() else {
+        return;
+    };
     let mut results: Vec<PairResult> = std::fs::read_dir(&last)
         .into_iter()
         .flatten()
@@ -554,7 +554,7 @@ fn batch_view(b: &BatchState) -> BatchView {
             .items
             .iter()
             .map(|i| {
-                let pn = if i.stage == Stage::Print { names.print_name(&i.file) } else { None };
+                let pn = if i.stage != Stage::Negative { names.print_name(&i.file) } else { None };
                 BatchItemView {
                     id: i.id,
                     stage: i.stage,
@@ -565,6 +565,8 @@ fn batch_view(b: &BatchState) -> BatchView {
                     input: i.input,
                     output: i.output,
                     include: i.include,
+                    measured: i.measured.clone(),
+                    auto_name: auto_name(i.stage, &i.file, &names),
                     variant_word: pn.as_ref().and_then(|p| p.variant.as_ref().and_then(|v| names.variants.get(v).cloned())),
                     variant: pn.as_ref().and_then(|p| p.variant.clone()),
                     flags: pn.map(|p| p.flags).unwrap_or_default(),
@@ -579,10 +581,18 @@ fn batch_view(b: &BatchState) -> BatchView {
 }
 
 fn auto_name(stage: Stage, file: &str, names: &StockNames) -> String {
-    let fallback = || stem(file);
-    match stage {
-        Stage::Negative => negative_name(file).unwrap_or_else(fallback),
-        Stage::Print => names.print_name(file).map(|p| p.name).unwrap_or_else(fallback),
+    names.name_for(stage, file)
+}
+
+/// Letter repeated names within each list (a, b, c…), keeping hand-typed names as typed.
+fn dedupe_items(b: &mut BatchState, names: &StockNames) {
+    for stage in [Stage::Negative, Stage::Print, Stage::Full] {
+        let idx: Vec<usize> = (0..b.items.len()).filter(|&k| b.items[k].stage == stage && !b.items[k].name_edited).collect();
+        let mut n: Vec<String> = idx.iter().map(|&k| auto_name(stage, &b.items[k].file, names)).collect();
+        lutmatrix_core::film::dedupe(&mut n);
+        for (k, name) in idx.into_iter().zip(n) {
+            b.items[k].name = name;
+        }
     }
 }
 
@@ -608,19 +618,23 @@ async fn batch_add(paths: Vec<String>, stage: Option<Stage>, state: State<'_, Ap
             Ok(lut) => {
                 let d = detect(&lut);
                 let file = file_name(&path);
-                let stage = stage.unwrap_or_else(|| guess_stage(&file, &names));
-                loaded.push((path, file, stage, d.input.value, d.output_space(), lut));
+                let lut2 = Arc::new(lut);
+                let l3 = lut2.clone();
+                let measured = tauri::async_runtime::spawn_blocking(move || measure_stage(&l3)).await.map_err(err)?;
+                let stage = stage.unwrap_or(measured.stage);
+                loaded.push((path, file, stage, d.input.value, d.output_space(), lut2, measured));
             }
             Err(e) => problems.push(format!("{}: {e}", file_name(&path))),
         }
     }
     let mut b = state.batch.lock().unwrap();
-    for (path, file, stage, input, output, lut) in loaded {
+    for (path, file, stage, input, output, lut, measured) in loaded {
         b.next_id += 1;
         let name = auto_name(stage, &file, &names);
         let id = b.next_id;
-        b.items.push(BatchItem { id, stage, path, file, name, name_edited: false, lut: Arc::new(lut), input, output, include: true });
+        b.items.push(BatchItem { id, stage, path, file, name, name_edited: false, lut, input, output, include: true, measured });
     }
+    dedupe_items(&mut b, &names);
     if !problems.is_empty() {
         return Err(problems.join("\n"));
     }
@@ -642,7 +656,9 @@ fn batch_update(updates: Vec<BatchItemUpdate>, state: State<AppState>) -> CmdRes
     let names = stock_names();
     let mut b = state.batch.lock().unwrap();
     for u in updates {
-        let Some(i) = b.items.iter_mut().find(|i| i.id == u.id) else { continue };
+        let Some(i) = b.items.iter_mut().find(|i| i.id == u.id) else {
+            continue;
+        };
         if let Some(st) = u.stage {
             if st != i.stage {
                 i.stage = st;
@@ -671,6 +687,7 @@ fn batch_update(updates: Vec<BatchItemUpdate>, state: State<AppState>) -> CmdRes
             i.include = x;
         }
     }
+    dedupe_items(&mut b, &names);
     Ok(batch_view(&b))
 }
 
@@ -678,6 +695,7 @@ fn batch_update(updates: Vec<BatchItemUpdate>, state: State<AppState>) -> CmdRes
 fn batch_remove(ids: Vec<u32>, state: State<AppState>) -> BatchView {
     let mut b = state.batch.lock().unwrap();
     b.items.retain(|i| !ids.contains(&i.id));
+    dedupe_items(&mut b, &stock_names());
     batch_view(&b)
 }
 
@@ -695,9 +713,7 @@ fn stock_names_set(names: StockNames, state: State<AppState>) -> CmdResult<Batch
     }
     std::fs::write(&path, serde_json::to_string_pretty(&names).map_err(err)? + "\n").map_err(err)?;
     let mut b = state.batch.lock().unwrap();
-    for i in b.items.iter_mut().filter(|i| !i.name_edited) {
-        i.name = auto_name(i.stage, &i.file, &names);
-    }
+    dedupe_items(&mut b, &names);
     Ok(batch_view(&b))
 }
 
@@ -725,7 +741,7 @@ struct BatchProgress {
 /// results also go to a new folder under `batches/` in the data folder.
 #[tauri::command]
 async fn batch_run(req: BatchRunRequest, app: AppHandle, state: State<'_, AppState>) -> CmdResult<BatchView> {
-    let (negatives, prints, folder) = {
+    let (negatives, prints, fulls, folder) = {
         let mut b = state.batch.lock().unwrap();
         if b.running {
             return Err("a batch is already running".into());
@@ -742,20 +758,15 @@ async fn batch_run(req: BatchRunRequest, app: AppHandle, state: State<'_, AppSta
             .filter(|i| i.include && i.stage == Stage::Print)
             .map(|i| Print { name: i.name.clone(), file: i.file.clone(), lut: (*i.lut).clone(), output: i.output })
             .collect();
-        if negatives.is_empty() || prints.is_empty() {
-            return Err("add at least one negative and one print, and tick them".into());
-        }
-        let mut seen = std::collections::HashMap::new();
-        for n in &negatives {
-            for p in &prints {
-                let name = lutmatrix_core::film::pair_name(&n.name, &p.name);
-                if let Some((a, c)) = seen.insert(name.clone(), (n.file.clone(), p.file.clone())) {
-                    return Err(format!(
-                        "two pairs would both be called '{name}' ({a} + {c}, and {} + {}); rename one",
-                        n.file, p.file
-                    ));
-                }
-            }
+        let fulls: Vec<Full> = b
+            .items
+            .iter()
+            .filter(|i| i.include && i.stage == Stage::Full)
+            .map(|i| Full { name: i.name.clone(), file: i.file.clone(), lut: (*i.lut).clone(), input: i.input, output: i.output })
+            .collect();
+        let pairs = negatives.len() * prints.len();
+        if pairs == 0 && fulls.is_empty() {
+            return Err("add at least one negative and one print (or a full LUT), and tick them".into());
         }
         let folder = if req.check_only {
             None
@@ -770,7 +781,7 @@ async fn batch_run(req: BatchRunRequest, app: AppHandle, state: State<'_, AppSta
         if folder.is_some() {
             b.folder = folder.clone();
         }
-        (negatives, prints, folder)
+        (negatives, prints, fulls, folder)
     };
     state.batch_cancel.store(false, Ordering::Relaxed);
     let cancel = state.batch_cancel.clone();
@@ -778,7 +789,7 @@ async fn batch_run(req: BatchRunRequest, app: AppHandle, state: State<'_, AppSta
     let app2 = app.clone();
     let folder2 = folder.clone();
     let results = tauri::async_runtime::spawn_blocking(move || {
-        batch::run(&negatives, &prints, &opts, &cancel, |done, total, r| {
+        batch::run(&negatives, &prints, &fulls, &opts, &cancel, |done, total, r| {
             if let Some(f) = &folder2 {
                 let path = f.join(format!("{}.json", r.name.replace(['/', '\\', ':'], "-")));
                 let _ = std::fs::write(path, serde_json::to_string_pretty(r).unwrap_or_default() + "\n");
@@ -822,7 +833,9 @@ fn batch_save(names: Vec<String>, replace: bool, state: State<AppState>) -> CmdR
     let mut saved = Vec::new();
     let mut existing = Vec::new();
     for n in &names {
-        let Some(m) = b.results.iter().find(|r| &r.name == n).and_then(|r| r.result.as_ref()) else { continue };
+        let Some(m) = b.results.iter().find(|r| &r.name == n).and_then(|r| r.result.as_ref()) else {
+            continue;
+        };
         let p = StoredPreset::from_match(m, Some(n)).map_err(err)?;
         if !replace && s.get(&p.name).is_ok() {
             existing.push(p.name);
