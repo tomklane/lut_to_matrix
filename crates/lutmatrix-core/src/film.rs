@@ -70,7 +70,9 @@ fn prefix_match<'a>(table: &'a BTreeMap<String, String>, stem: &str) -> Option<(
     keys.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
     keys.into_iter().find(|(k, _)| {
         let k = k.to_ascii_lowercase();
-        lower.starts_with(&k) && lower[k.len()..].chars().next().map_or(true, |c| !c.is_ascii_alphanumeric())
+        let rest = lower.strip_prefix(k.as_str());
+        // A whole code: followed by a separator, the end, or "Profile" ("Dlook4bProfile_To_…").
+        rest.is_some_and(|r| r.chars().next().map_or(true, |c| !c.is_ascii_alphanumeric()) || r.starts_with("profile"))
     })
 }
 
@@ -372,6 +374,8 @@ mod tests {
         assert_eq!((p.look.as_str(), p.variant.as_deref(), p.revision.as_deref()), ("DLook4", Some("N"), Some("V2")));
         assert_eq!(p.flags, vec!["gn"]);
         assert_eq!(n.print_name("Dlook4-NAT_Profile_To_Rec709.dat").unwrap().name, "2383v1_Native", "case-insensitive");
+        assert_eq!(n.print_name("Dlook4Profile_To_Rec709.dat").unwrap().name, "2383v1", "code run into 'Profile'");
+        assert!(n.print_name("DLook42Profile_To_Rec709.dat").is_none(), "DLook4 is not DLook42");
         assert_eq!(n.print_name("DLook10-P3_gn_Profile.dat").unwrap().name, "2393v2_DCI_Neutralized", "DLook10, not DLook1");
         assert_eq!(n.print_name("DLook10-U_Profile.dat").unwrap().name, "2393v2_3514DIConstrain");
         assert!(n.print_name("DLook42D60ToDciP3_To_Rec709.dat").is_none(), "DLook4 is not a prefix of DLook42");

@@ -44,6 +44,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Naming: FilmLog 33/34 negatives are named `FilmLog`; `LogC33_`/`LogC34_` full LUTs
   `FilmLog_` + the print name; a `D55toD58` white move in a print's name adds `_D58`; a
   `negatives` table in `stock-names.json` names negatives without a stock number.
+  A look code run straight into "Profile" (`Dlook4bProfile_To_…`) is recognised.
 
 ## [0.2.0] - 2026-10-26
 
