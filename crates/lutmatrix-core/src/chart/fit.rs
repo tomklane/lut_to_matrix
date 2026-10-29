@@ -350,7 +350,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     if fit.mean_after > 6.0 {
         fit.notes.push(format!(
             "mean error after correction is {:.1} ΔE2000: the camera's colours differ from the chart in ways a {} can't \
-             undo (spectral differences, e.g. underwater light, or a non-linear look baked into the still)",
+             undo (spectral differences, e.g. strongly coloured or filtered light, or a non-linear look baked into the still)",
             fit.mean_after,
             if s.model == Model::Matrix { "3×3 matrix" } else { "matrix and tone curve" }
         ));

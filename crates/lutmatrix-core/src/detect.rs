@@ -490,9 +490,9 @@ mod tests {
             ("F-Log_to_BT709.cube", CameraSpaceId::FujiFLogFGamut),
             ("DWG_DI_to_Rec709.cube", CameraSpaceId::DaVinciIntermediateDwg),
             ("ACEScct_to_P3D65.cube", CameraSpaceId::AcesCctAp1),
-            ("ACES2065_to_5207_pull2_K2393_D65_709G24.cube", CameraSpaceId::Aces2065Ap0),
+            ("ACES2065_to_Print_709G24.cube", CameraSpaceId::Aces2065Ap0),
             ("ACES2065-1_AP0_to_Rec709.cube", CameraSpaceId::Aces2065Ap0),
-            ("AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d.cube", CameraSpaceId::ArriLogC3Awg3),
+            ("AlexaV3_LookA_LogC2Video_Rec709_EE_davinci3d.cube", CameraSpaceId::ArriLogC3Awg3),
         ];
         for (name, want) in cases {
             assert_eq!(detect(&named(name)).input.value.id, want, "{name}");

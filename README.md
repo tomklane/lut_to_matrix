@@ -56,8 +56,8 @@ with a clipped channel are left out and marked; click a patch to leave it out to
 another camera's chart (*Another camera*), updates as you change anything: *Export
 DCTL…* writes it as a DWG/DI DCTL, and *Fit Preset* fits an OpenDRT look preset (after
 the matrix by default) that you can save to the library. Export stills as half-float
-EXR when you can: 16-bit integer files can't hold the negative values that saturated or
-underwater colours often have.
+EXR when you can: 16-bit integer files can't hold the negative values that saturated
+colours often have.
 
 
 ## Build
@@ -152,13 +152,13 @@ own output).
 ### Match OpenDRT to a LUT
 
 ```sh
-lutmatrix opendrt fit --name "LUT Match K1S1" "K1S1.cube"   # fit and save to your preset library
+lutmatrix opendrt fit --name "LUT Match My Look" "MyLook.cube"   # fit and save to your preset library
 lutmatrix opendrt fit --input arri_log_c3_awg3 --freeze brl "x.cube"
 lutmatrix opendrt fit --neutral-gray every-level "print.cube"   # remove the LUT's gray cast first
 lutmatrix opendrt fit --neutral-gray white-gain --white-stops 3 "look.cube"   # balance its white with a gain after the LUT
 lutmatrix opendrt presets list                               # also: show, remove, import, export, path
 lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl            # OpenDRT + every preset in your library
-lutmatrix opendrt build --preset "LUT Match K1S1" -o K1S1.dctl
+lutmatrix opendrt build --preset "LUT Match My Look" -o MyLook.dctl
 ```
 
 ### Match a camera to a chart
@@ -184,8 +184,8 @@ display) and a full LUT (camera log → display) apart; `-n`/`-p`/`-f` set the l
 yourself. Each pair is the negative LUT followed by the print LUT; full LUTs are matched
 on their own. Names come from film stocks: the negative's stock number and pull/push from
 its file name (or `FilmLog`), the print's from `stock-names.json` in your data folder
-(`{"looks": {"DLook4": "2383v1"}, "variants": {"N": "D60"}, "flags": {"gn":
-"Neutralized"}, "negatives": {"k8Film5219": "5219k8"}}`). Names that would repeat get
+(`{"looks": {"Look4": "2383v1"}, "variants": {"N": "D60"}, "flags": {"gn":
+"Neutralized"}, "negatives": {"MyNeg": "5219custom"}}`). Names that would repeat get
 a, b, c….
 
 `fit` adjusts every OpenDRT v1.1.0 look parameter and the Display Grey Luminance so that

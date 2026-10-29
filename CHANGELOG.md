@@ -21,7 +21,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     out more by hand, or place the chart by clicking its corner patches.
   - Exposure: matched to the target (default) or kept. Neutral locked by default.
     Restraint pulls the matrix towards a plain white balance, for footage where the
-    camera barely recorded a channel (e.g. red under water).
+    camera barely recorded a channel.
   - CLI: `lutmatrix chart <still> [--curve … --gamut …] [--model tone] [--target hero.tif]
     [--dctl out.dctl] [--opendrt --save NAME]`.
 - App: **Chart** section (⌘3). Drop or open a still; the chart is shown with every sampled
@@ -34,6 +34,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - Minimum Rust version 1.88 (needed by the image decoders).
+- Docs, examples, tests and the dev mock no longer name the user's own LUTs or test
+  stills; they use generic names (the code is unchanged).
 
 ## [0.3.0] - 2026-10-27
 
@@ -63,7 +65,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reaches 1 exactly (DECISIONS D35). The result says how much, or that none was needed.
 - The OpenDRT Match gray-axis chart can show the LUT as it is or after the correction
   (what the fit actually matched); the report keeps both.
-- Batches take **full LUTs** (camera log → display, like `LogC34_DLook4…`) too: they are
+- Batches take **full LUTs** (camera log → display, like `LogC34_<print>…`) too: they are
   matched on their own after the pairs, not stacked with a negative. CLI: `--full`.
 - Every LUT added to a batch is **measured** to decide whether it is a negative, a print
   or a full LUT (how fast its output rises per stop through the mid-tones; DECISIONS
@@ -75,7 +77,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Naming: FilmLog 33/34 negatives are named `FilmLog`; `LogC33_`/`LogC34_` full LUTs
   `FilmLog_` + the print name; a `D55toD58` white move in a print's name adds `_D58`; a
   `negatives` table in `stock-names.json` names negatives without a stock number.
-  A look code run straight into "Profile" (`Dlook4bProfile_To_…`) is recognised.
+  A look code run straight into "Profile" (`<look>Profile_To_…`) is recognised.
 
 ## [0.2.0] - 2026-10-26
 
