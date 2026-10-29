@@ -346,8 +346,8 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   the version has no section, so a release can't go out without its changelog.
 - The command-line tool ships as separate archives (universal on macOS); it isn't put on
   the PATH by the installers.
-- No auto-updater: Tauri's updater needs its own signing key held as a repository secret
-  and an update endpoint; not worth it yet for one user. Settings and presets live in the
+- No auto-updater at first (Tauri's updater needs its own signing key and an update
+  endpoint); added in 0.4.0, see D41. Settings and presets live in the
   user data folder, so installing over an old version keeps them.
 
 ## D32 — P3-D65 2.6 display encoding in built DCTLs (user request 2026-10-19)
@@ -551,3 +551,27 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Saved presets record the chart fit (source still, base look, target, scores) and appear
   in the library and OpenDRT builds like LUT Match presets. Use them with the same
   Display Encoding Preset they were fitted for.
+
+## D41 — In-app updates (user request 2026-10-29)
+- Tauri's updater plugin (+ process plugin to relaunch). The app reads
+  `https://github.com/tomklane/lut_to_matrix/releases/latest/download/latest.json`: the
+  manifest on the newest published, non-pre-release GitHub Release (the repository is
+  public, so no token is needed). Drafts and pre-releases are never offered.
+- Check a few seconds after launch (setting, default on; quiet on failure, e.g. offline or
+  no release yet), and by hand in About. An available update shows a banner with the
+  release notes, *Later* (hides it for that version) and *Install and Relaunch* (progress
+  bar). Windows installs in passive mode (progress window, no questions).
+- Integrity: every update file is signed with a minisign key (Tauri's `signer`); the
+  public key is in `tauri.conf.json`, the private key and its password are repository
+  secrets used only by the Release workflow. The updater refuses anything unsigned or
+  signed by another key. This is independent of Apple/Microsoft code signing (still
+  none, D31); the ad-hoc signed app replaces itself in place, and files the app downloads
+  itself get no quarantine flag, so no Gatekeeper prompt after the first install.
+- Files: macOS gets one universal `.app.tar.gz` for both architectures; Windows updates
+  with the NSIS installer, or with the MSI when the app was installed from the MSI
+  (`windows-x86_64-msi`), so an update never installs a second copy.
+  `tools/updater_manifest.py` writes `latest.json` from the signatures in the release
+  job; notes come from the changelog.
+- Without the secrets the workflow still builds (update artifacts switched off, with a
+  warning), so forks and test builds keep working.
+- Versions older than 0.4.0 have no updater: they are updated once by hand.
