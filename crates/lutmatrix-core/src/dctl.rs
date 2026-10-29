@@ -131,12 +131,12 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// Float literal for DCTL: 10 decimals (more than float32 resolves) and an `f` suffix.
-fn lit(v: f64) -> String {
+pub(crate) fn lit(v: f64) -> String {
     let v = if v == 0.0 { 0.0 } else { v }; // no "-0"
     format!("{v:.10}f")
 }
 
-fn matrix_fn(out: &mut String, name: &str, doc: &str, m: &Mat3) {
+pub(crate) fn matrix_fn(out: &mut String, name: &str, doc: &str, m: &Mat3) {
     let _ = writeln!(out, "// {doc}");
     let _ = writeln!(out, "__DEVICE__ Mat3x3 {name}()");
     let _ = writeln!(out, "{{");
@@ -157,7 +157,7 @@ fn matrix_fn(out: &mut String, name: &str, doc: &str, m: &Mat3) {
 
 /// Sanitise text for a `//` comment line: one line, ASCII only (some GPU compilers
 /// reject non-ASCII bytes even in comments).
-fn c(s: &str) -> String {
+pub(crate) fn c(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {

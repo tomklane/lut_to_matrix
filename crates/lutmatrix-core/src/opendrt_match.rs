@@ -206,7 +206,7 @@ struct Problem {
 }
 
 /// OpenDRT display settings for a LUT output space.
-fn drt_display(output: &OutputSpace) -> Result<(DrtGamut, Eotf, f32), MatchError> {
+pub(crate) fn drt_display(output: &OutputSpace) -> Result<(DrtGamut, Eotf, f32), MatchError> {
     let gamut = match output.gamut {
         DisplayGamut::Rec709 => DrtGamut::Rec709,
         DisplayGamut::P3D65 => DrtGamut::P3D65,
@@ -224,12 +224,12 @@ fn drt_display(output: &OutputSpace) -> Result<(DrtGamut, Eotf, f32), MatchError
 }
 
 /// Scene XYZ (D65, Y = 1 white) → OpenDRT input (DaVinci Intermediate, DWG).
-fn to_di(xyz: &Vec3) -> [f32; 3] {
+pub(crate) fn to_di(xyz: &Vec3) -> [f32; 3] {
     let dwg = davinci::xyz_to_dwg() * xyz;
     [di_encode(dwg.x) as f32, di_encode(dwg.y) as f32, di_encode(dwg.z) as f32]
 }
 
-fn threads(n: usize) -> usize {
+pub(crate) fn threads(n: usize) -> usize {
     if n > 0 {
         n
     } else {
@@ -310,7 +310,7 @@ fn training_colours(ring_space: &InputSpace, output: &OutputSpace) -> Vec<(Vec3,
 }
 
 /// Modules a preset may have off, with the parameters that make them a no-op at 0.
-const NEUTRAL: [(&str, &[&str]); 9] = [
+pub(crate) const NEUTRAL: [(&str, &[&str]); 9] = [
     ("tn_hcon_enable", &["tn_hcon"]),
     ("tn_lcon_enable", &["tn_lcon"]),
     ("ptl_enable", &["ptl_c", "ptl_m", "ptl_y"]),
@@ -329,13 +329,13 @@ const GREY_MAX: f64 = 25.0;
 type PresetId = (usize, usize, usize);
 
 /// The optimisation variables: indices of free look parameters (+ grey) in [0, 1] units.
-struct Vars {
-    look_idx: Vec<usize>,
-    grey: bool,
+pub(crate) struct Vars {
+    pub(crate) look_idx: Vec<usize>,
+    pub(crate) grey: bool,
 }
 
 impl Vars {
-    fn new(freeze: &[String]) -> Vars {
+    pub(crate) fn new(freeze: &[String]) -> Vars {
         let frozen = |name: &str| freeze.iter().any(|f| name.starts_with(f.as_str()));
         let look_idx = LookParams::info()
             .iter()
@@ -346,7 +346,7 @@ impl Vars {
         Vars { look_idx, grey: !freeze.iter().any(|f| f == "grey") }
     }
 
-    fn to_unit(&self, cfg: &Config) -> Vec<f64> {
+    pub(crate) fn to_unit(&self, cfg: &Config) -> Vec<f64> {
         let a = cfg.look.to_array();
         let info = LookParams::info();
         let mut u: Vec<f64> = self
@@ -360,7 +360,7 @@ impl Vars {
         u
     }
 
-    fn apply(&self, base: &Config, u: &[f64]) -> Config {
+    pub(crate) fn apply(&self, base: &Config, u: &[f64]) -> Config {
         let mut cfg = *base;
         let mut a = cfg.look.to_array();
         let info = LookParams::info();
@@ -378,7 +378,7 @@ impl Vars {
 /// Bounded Levenberg–Marquardt on u ∈ [0,1]ⁿ: forward-difference Jacobian (columns in
 /// parallel), variables pinned at a bound by the gradient left out of the step, steps
 /// projected onto the box.
-fn bounded_lm(u0: Vec<f64>, resid: &(dyn Fn(&[f64]) -> Vec<f64> + Sync), max_iter: usize, threads: usize) -> Vec<f64> {
+pub(crate) fn bounded_lm(u0: Vec<f64>, resid: &(dyn Fn(&[f64]) -> Vec<f64> + Sync), max_iter: usize, threads: usize) -> Vec<f64> {
     let n = u0.len();
     let mut u = u0;
     let mut r = resid(&u);
@@ -630,7 +630,7 @@ pub fn match_opendrt(
             let u = bounded_lm(u0.clone(), &resid, settings.max_iterations, prob.threads);
             let cfg = vars.apply(&cfg0, &u);
             let s = prob.weighted(&cfg);
-            if best.as_ref().map_or(true, |b| s < b.0) {
+            if best.as_ref().is_none_or(|b| s < b.0) {
                 best = Some((s, cfg, *st));
             }
         }
@@ -744,7 +744,7 @@ pub fn exposure_reversals(cfg: &Config, ring_space: &InputSpace, output: &Output
                 // Allow float noise and the flat top of a clipped output.
                 if y < py * (1.0 - 2e-3) - 1e-4 {
                     let drop = 100.0 * (py - y) / py;
-                    if worst.map_or(true, |w| drop > w.1) {
+                    if worst.is_none_or(|w| drop > w.1) {
                         worst = Some((ps, drop));
                     }
                 }
@@ -802,7 +802,7 @@ fn roughness(cfg: &Config, ring_space: &InputSpace, n: usize) -> f64 {
     worst
 }
 
-fn safety_checks(cfg: &Config, ring_space: &InputSpace, output: &OutputSpace) -> Safety {
+pub(crate) fn safety_checks(cfg: &Config, ring_space: &InputSpace, output: &OutputSpace) -> Safety {
     let drt = OpenDrt::new(cfg);
     let n = 17;
     let mut finite_in_range = true;

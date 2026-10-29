@@ -17,6 +17,7 @@ use lutmatrix_opendrt::{Config, LookParams};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::chart::odrt::OdrtChartFit;
 use crate::opendrt_match::OpenDrtMatch;
 
 const FORMAT: &str = "lutmatrix-opendrt-preset";
@@ -59,6 +60,9 @@ pub struct StoredPreset {
     /// The full fit report, when fitted by this app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<OpenDrtMatch>,
+    /// The chart fit report, for presets fitted to a colour chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<OdrtChartFit>,
 }
 
 fn now_unix() -> u64 {
@@ -80,7 +84,17 @@ impl StoredPreset {
             look,
             grey_nits,
             report: None,
+            chart: None,
         })
+    }
+
+    /// From a chart fit; `name` defaults to "Chart <image name>".
+    pub fn from_chart(f: &OdrtChartFit, name: Option<&str>) -> Result<Self, StoreError> {
+        let default = format!("Chart {}", stem(&f.source));
+        let source = format!("chart in {} ({}; {})", f.source, f.base, f.target);
+        let mut p = StoredPreset::new(name.unwrap_or(&default), &source, f.config.look, f.config.grey_nits * f.config.grey_scale)?;
+        p.chart = Some(f.clone());
+        Ok(p)
     }
 
     /// From an `opendrt fit` result; `name` defaults to "LUT Match <LUT name>".

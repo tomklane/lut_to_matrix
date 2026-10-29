@@ -1,5 +1,7 @@
 //! `lutmatrix` command-line front end.
 
+mod chart;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -51,6 +53,9 @@ enum Cmd {
     /// Pairs are named `negative_print` from film stocks: the negative's stock number
     /// (+ pull/push) from its file name, the print's from your stock-names table.
     Batch(BatchArgs),
+    /// Find a colour chart in a still, fit a correction to it (DWG/DI DCTL), and
+    /// optionally an OpenDRT look preset.
+    Chart(chart::ChartArgs),
     /// Measure the LUT around middle gray and fit the 3x3 XYZ matrix.
     Fit {
         file: PathBuf,
@@ -957,6 +962,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Cmd::Batch(args) => match run_batch(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
+        Cmd::Chart(args) => match chart::run(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("{e}");
