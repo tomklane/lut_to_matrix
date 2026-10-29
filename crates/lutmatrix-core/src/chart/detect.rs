@@ -638,12 +638,19 @@ pub struct PatchSample {
 pub struct ClipLevels {
     pub low: [f64; 3],
     pub high: [f64; 3],
+    /// The channel piles up at its largest value (a measured clip, not just the file's
+    /// range).
+    pub plateau: [bool; 3],
+    /// Largest finite stored value per channel.
+    pub max: [f64; 3],
 }
 
 pub fn clip_levels(img: &ChartImage) -> ClipLevels {
     let half_code = if img.info.max_code > 0 { 0.5 / img.info.max_code as f64 } else { 0.0 };
     let mut low = [f64::NEG_INFINITY; 3];
     let mut high = [f64::INFINITY; 3];
+    let mut plateau = [false; 3];
+    let mut max = [f64::NAN; 3];
     if !img.info.float {
         low = [half_code; 3];
         high = [1.0 - half_code; 3];
@@ -656,6 +663,9 @@ pub fn clip_levels(img: &ChartImage) -> ClipLevels {
                 mx = mx.max(p[ch]);
             }
         }
+        if mx.is_finite() {
+            max[ch] = mx as f64;
+        }
         if mx <= 0.0 || !mx.is_finite() {
             continue;
         }
@@ -663,9 +673,10 @@ pub fn clip_levels(img: &ChartImage) -> ClipLevels {
         let at = img.data.as_chunks::<3>().0.iter().filter(|p| p[ch] as f64 >= mx as f64 - tol).count();
         if at as f64 > 5e-4 * n as f64 {
             high[ch] = high[ch].min(mx as f64 - tol);
+            plateau[ch] = true;
         }
     }
-    ClipLevels { low, high }
+    ClipLevels { low, high, plateau, max }
 }
 
 /// Sample patch (c, r) of `p`: a square `frac` of the patch pitch wide around the

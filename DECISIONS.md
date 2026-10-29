@@ -575,3 +575,44 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Without the secrets the workflow still builds (update artifacts switched off, with a
   warning), so forks and test builds keep working.
 - Versions older than 0.4.0 have no updater: they are updated once by hand.
+
+## D42 — Clipped highlights: preserve neutrals, highlight protection (user request 2026-10-29)
+- Problem: under strongly coloured light (under water) the camera's gray is far from equal
+  R, G, B (e.g. 0.63 : 1 : 1.22 in linear DWG). A chart fit makes that gray neutral with
+  a large red gain, so equal R, G, B, which is what the file holds where every channel
+  clipped, comes out red (1 : 0.37 : 0.31); OpenDRT then shows a magenta sun. Where only
+  green clips the ratios are wrong and the correction swings them further (pink halo).
+  No colour-only correction (matrix, TPS, 3D LUT) can tell clipped values from real
+  ones; this is not a 3×3 limitation.
+- **Preserve neutrals** (fit setting, default off): equal R, G, B in linear DWG stay
+  equal. Parameterised as the DWG matrix with every row summing to one gain g (7
+  parameters, like an RGB mixer whose rows sum to 1); the tone model then uses one
+  power and one black for all three channels. Replaces the neutral lock (both can't hold
+  while the gray isn't neutral). The matrix can no longer white-balance, so on an
+  unbalanced still it gives a poor fit (the grays keep the cast, colours suffer: 6.5 →
+  14 ΔE on the underwater still). Any correction splits exactly into a white balance
+  then a neutral-preserving matrix; on that still white-balanced first, the preserving
+  fit is as good as the free one (6.48 vs 6.51). So the intended use is: white-balance
+  in the raw decode, where highlights are handled before the correction, export the
+  chart still that way, fit with neutrals preserved. The fit reports the camera's gray
+  in DWG and a note when it isn't neutral; the free fit notes what equal R, G, B
+  becomes when it is far from neutral.
+- **Highlight protection** (DCTL option, default off, sliders in the DCTL): weight w from
+  0 at `softness` stops below the clip to `strength` at the clip (smoothstep, on log2 of
+  a level / clip level). The input is pulled towards its brightest channel by w (the
+  clipped pixel's most likely colour is neutral at the clip), and the corrected result
+  towards a neutral of its own luminance by w (white at the brightness the correction
+  gives it, so no dark or bright band at the edge).
+- Detection level = brightest channel + (darkest − brightest) · `detect`. On the
+  underwater still green clips on 3.6 % of the frame (bright water around the sun) but
+  all three only on 0.2 %; triggering on any channel whitens the whole bright area,
+  which looks worse than the correction's colour there. Default `detect` = 1 (all
+  channels: the magenta core), with "any channel" one click away for halos.
+- Clip level: measured from the chart still where a channel piles up at its maximum
+  (the earliest-clipping channel, taken as neutral, converted to DI through the still's
+  encoding); else the still's brightest value, flagged "set it to where the footage
+  clips"; or set by hand. Defaults in the DCTL are these values; ranges 0.2–1.0 DI and
+  0.1–4 stops.
+- Rust (`chart::highlights::Highlights::apply`) and the DCTL use the same formulas; the
+  DCTL test compiles it and compares (protection, preserving fit, both models).
+

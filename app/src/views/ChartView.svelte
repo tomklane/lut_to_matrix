@@ -250,6 +250,22 @@
   const odrtScale = $derived(o ? Math.max(o.before.mean, o.after.mean) * 1.05 : 1);
   const odrtSmooth = $derived(o ? o.safety.roughness <= 1.5 * o.safety.stock_roughness : true);
   const unused = $derived(a ? a.patches.filter((p) => !p.used) : []);
+  // Equal R, G, B through the matrix (linear DWG), brightest channel = 1.
+  const whiteOut = $derived.by(() => {
+    if (!f) return null;
+    const w = f.m_dwg.map((r) => r[0] + r[1] + r[2]);
+    const mx = Math.max(...w);
+    return mx > 0 ? w.map((v) => v / mx) : null;
+  });
+  function clipSourceText(s: string): string {
+    return s === "measured"
+      ? "measured in this still"
+      : s === "brightest"
+        ? "this still doesn't clip: its brightest value, set it to where the footage clips"
+        : s === "set"
+          ? "set by hand"
+          : "a typical value";
+  }
   const confClass = (c: string) => `badge ${c}`;
 </script>
 
@@ -488,8 +504,16 @@
             </div>
           </div>
           <div class="row">
-            <div class="label">Lock neutral<div class="sub">Grays land exactly on the target's gray</div></div>
-            <div class="value"><Toggle bind:checked={app.chart.fit.lock_neutral} label="Lock neutral" /></div>
+            <div class="label">
+              Preserve neutrals<div class="sub">Equal R, G, B stay equal, so clipped white stays white. The grays keep the camera's cast: white-balance in the raw decode first</div>
+            </div>
+            <div class="value"><Toggle bind:checked={app.chart.fit.preserve_neutrals} label="Preserve neutrals" /></div>
+          </div>
+          <div class="row" class:off={app.chart.fit.preserve_neutrals}>
+            <div class="label">
+              Lock neutral<div class="sub">{app.chart.fit.preserve_neutrals ? "Off while neutrals are preserved" : "Grays land exactly on the target's gray"}</div>
+            </div>
+            <div class="value"><Toggle bind:checked={app.chart.fit.lock_neutral} label="Lock neutral" disabled={app.chart.fit.preserve_neutrals} /></div>
           </div>
           <div class="row">
             <div class="label">Restraint<div class="sub">Closer to a plain white balance: less noise where a channel was barely recorded</div></div>
@@ -522,6 +546,76 @@
                 <div class="value num small">power {f.tone.power.map((v) => fmt(v, 3)).join(" / ")} · black {f.tone.black.map((v) => fmt(v, 4)).join(" / ")}</div>
               </div>
             {/if}
+            <div class="row">
+              <div class="label">Neutrals<div class="sub">The camera's gray, and what equal R, G, B (clipped white) becomes</div></div>
+              <div class="value num small">
+                gray {fmt(f.gray_dwg[0], 2)} : 1 : {fmt(f.gray_dwg[2], 2)} · white →
+                <span class:warnc={whiteOut && Math.min(...whiteOut) < 0.8}>{whiteOut ? whiteOut.map((v) => fmt(v, 2)).join(" : ") : "—"}</span>
+              </div>
+            </div>
+          {/if}
+          <div class="row">
+            <div class="label">Highlight protection<div class="sub">In the DCTL: near the clip, clipped areas go to white instead of the colour the correction gives them</div></div>
+            <div class="value"><Toggle bind:checked={app.chart.highlights.enabled} label="Highlight protection" /></div>
+          </div>
+          {#if app.chart.highlights.enabled}
+            <div class="row">
+              <div class="label">
+                Clip level<div class="sub">
+                  DaVinci Intermediate code where the footage clips{#if a}
+                    {" · "}{clipSourceText(app.chart.highlights.clip_di === null ? a.highlights.source : a.highlights.measured_source)}
+                    {#if app.chart.highlights.clip_di !== null}{" "}{fmt(a.highlights.measured_di, 3)}{/if}
+                  {/if}
+                </div>
+              </div>
+              <div class="value">
+                <input
+                  type="number"
+                  class="clip"
+                  min="0.2"
+                  max="1"
+                  step="0.001"
+                  value={(app.chart.highlights.clip_di ?? a?.highlights.clip_di ?? 0.68).toFixed(3)}
+                  onchange={(e) => {
+                    const v = Number((e.currentTarget as HTMLInputElement).value);
+                    if (Number.isFinite(v)) app.chart.highlights.clip_di = Math.min(1, Math.max(0.2, v));
+                  }}
+                  aria-label="Clip level"
+                />
+                {#if app.chart.highlights.clip_di !== null}
+                  <button class="btn plain" onclick={() => (app.chart.highlights.clip_di = null)} title="Use the level measured in the still">Auto</button>
+                {/if}
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">Detect<div class="sub">Which pixels count as clipped: any channel at the clip, or only all of them</div></div>
+              <div class="value">
+                <Segmented
+                  bind:value={app.chart.highlights.detect}
+                  label="Detect"
+                  options={[
+                    { value: 0, label: "Any channel", title: "Also pixels where only one channel clips (e.g. green around the sun under water): larger white areas" },
+                    { value: 0.5, label: "Between" },
+                    { value: 1, label: "All channels", title: "Only where every channel clips" },
+                  ]}
+                />
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">Softness<div class="sub">How far below the clip the protection starts</div></div>
+              <div class="value">
+                <Segmented
+                  bind:value={app.chart.highlights.softness}
+                  label="Softness"
+                  options={[
+                    { value: 0.5, label: "½ stop" },
+                    { value: 1, label: "1 stop" },
+                    { value: 2, label: "2 stops" },
+                  ]}
+                />
+              </div>
+            </div>
+            <div class="row"><div class="faint small">All four are sliders in the DCTL too, to fine-tune in Resolve.</div></div>
           {/if}
           <div class="row go">
             <span class="grow"></span>
@@ -871,6 +965,16 @@
   }
   .row.go {
     min-height: 50px;
+  }
+  .row.off .label {
+    opacity: 0.55;
+  }
+  input.clip {
+    width: 84px;
+    text-align: right;
+  }
+  .warnc {
+    color: var(--orange, var(--red));
   }
   .grow {
     flex: 1;

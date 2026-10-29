@@ -440,6 +440,29 @@ export interface ChartFitSettings {
   lock_neutral: boolean;
   neutral_weight: number;
   restraint: number;
+  /** Equal RGB stays equal (clipped white stays white); replaces the neutral lock. */
+  preserve_neutrals: boolean;
+}
+export interface HighlightSettings {
+  enabled: boolean;
+  /** DI code value; null = measured from the still. */
+  clip_di: number | null;
+  softness: number;
+  strength: number;
+  /** 0 = any channel near the clip … 1 = only all of them. */
+  detect: number;
+}
+export const defaultHighlights: HighlightSettings = { enabled: false, clip_di: null, softness: 1, strength: 1, detect: 1 };
+export type ClipSource = "set" | "measured" | "brightest" | "default";
+export interface Highlights {
+  enabled: boolean;
+  clip_di: number;
+  source: ClipSource;
+  measured_di: number;
+  measured_source: ClipSource;
+  softness: number;
+  strength: number;
+  detect: number;
 }
 export interface ChartSettings {
   edition: ChartEdition;
@@ -451,8 +474,16 @@ export interface ChartSettings {
   clip_fraction: number;
   mirrors: boolean;
   fit: ChartFitSettings;
+  highlights: HighlightSettings;
 }
-export const defaultChartFit: ChartFitSettings = { model: "matrix", exposure: "match", lock_neutral: true, neutral_weight: 2, restraint: 0 };
+export const defaultChartFit: ChartFitSettings = {
+  model: "matrix",
+  exposure: "match",
+  lock_neutral: true,
+  neutral_weight: 2,
+  restraint: 0,
+  preserve_neutrals: false,
+};
 export interface PatchSample {
   mean: [number, number, number];
   std: [number, number, number];
@@ -501,6 +532,8 @@ export interface ChartFit {
   max_after: number;
   neutral_after: number;
   used: number;
+  /** The camera's mid gray in linear DWG, green = 1. */
+  gray_dwg: [number, number, number];
   notes: string[];
 }
 export interface ChartAnalysis {
@@ -525,6 +558,7 @@ export interface ChartAnalysis {
   patches: PatchReport[];
   fit: ChartFit | null;
   fit_error: string | null;
+  highlights: Highlights;
   notes: string[];
 }
 export interface ChartPreview {

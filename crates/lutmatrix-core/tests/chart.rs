@@ -6,6 +6,7 @@ use std::process::Command;
 use lutmatrix_core::chart::detect::{find_lattice, homography, Orientation};
 use lutmatrix_core::chart::encoding::{StillGamut, StillSpace};
 use lutmatrix_core::chart::fit::{Exposure, Model, Tone};
+use lutmatrix_core::chart::highlights::{ClipSource, HighlightSettings};
 use lutmatrix_core::chart::image::ChartImage;
 use lutmatrix_core::chart::odrt::{fit_opendrt_chart, OdrtChartSettings};
 use lutmatrix_core::chart::reference::ChartEdition;
@@ -216,6 +217,8 @@ static float3 make_float3(float x, float y, float z) { float3 r; r.x = x; r.y = 
 #define __DEVICE__ static
 #define _powf powf
 #define _log2f log2f
+#define _fmaxf fmaxf
+#define _fminf fminf
 #define DEFINE_UI_PARAMS(name, label, kind, def, lo, hi, step) static float name = def;
 "#;
 const MAIN: &str = r#"
@@ -232,8 +235,14 @@ int main(void) {
 #[test]
 fn chart_dctl_compiles_and_matches() {
     let img = di_still(UPSIDE_DOWN, cam(), 0.5);
-    for model in [Model::Matrix, Model::MatrixTone] {
-        let s = ChartSettings { fit: lutmatrix_core::chart::fit::FitSettings { model, ..Default::default() }, ..Default::default() };
+    let cases = [(Model::Matrix, false, false), (Model::MatrixTone, false, false), (Model::Matrix, true, true), (Model::MatrixTone, false, true)];
+    for (model, preserve, protect) in cases {
+        let s = ChartSettings {
+            fit: lutmatrix_core::chart::fit::FitSettings { model, preserve_neutrals: preserve, ..Default::default() },
+            // A clip inside the tested codes (up to 0.7), so the protection is exercised.
+            highlights: HighlightSettings { enabled: protect, clip_di: Some(0.55), softness: 1.5, strength: 0.9, detect: 0.3 },
+            ..Default::default()
+        };
         let mut a = analyze(&img, None, &s).unwrap();
         // Exercise a real curve in the tone model.
         if let Some(f) = a.fit.as_mut() {
@@ -244,8 +253,10 @@ fn chart_dctl_compiles_and_matches() {
         let src = a.dctl("2026-01-01").unwrap();
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone);
+        assert_eq!(src.contains("p_HlClip"), protect);
         let fit = a.fit.clone().unwrap();
-        let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}", std::process::id()));
+        let hl = a.highlights;
+        let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("c.dctl"), &src).unwrap();
         std::fs::write(dir.join("main.c"), format!("{SHIM}\n#include \"c.dctl\"\n{MAIN}")).unwrap();
@@ -255,10 +266,7 @@ fn chart_dctl_compiles_and_matches() {
                 Vec3::new((f * 0.137).fract() * 0.7, (f * 0.291).fract() * 0.7, (f * 0.533).fract() * 0.7)
             })
             .collect();
-        let want = |c: &Vec3| -> Vec3 {
-            let xyz = dwg_to_xyz() * c.map(di_decode);
-            (xyz_to_dwg() * fit.apply(&xyz)).map(di_encode)
-        };
+        let want = |c: &Vec3| -> Vec3 { (xyz_to_dwg() * hl.apply(&fit, &c.map(di_decode))).map(di_encode) };
         for (cc, args) in [("cc", vec!["-std=c99"]), ("c++", vec!["-x", "c++", "-std=c++14"])] {
             if Command::new(cc).arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
                 continue;
@@ -282,12 +290,37 @@ fn chart_dctl_compiles_and_matches() {
                 let got: Vec<f64> = line.split_whitespace().map(|v| v.parse().unwrap()).collect();
                 let w = want(&c.map(|v| v as f32 as f64));
                 for k in 0..3 {
-                    assert!((got[k] - w[k]).abs() < 2e-5 * w[k].abs().max(1.0), "{cc} {model:?} {c:?}: {got:?} vs {w:?}");
+                    assert!((got[k] - w[k]).abs() < 2e-5 * w[k].abs().max(1.0), "{cc} {model:?} {preserve} {protect} {c:?}: {got:?} vs {w:?}");
                 }
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+#[test]
+fn clip_level_is_measured_from_the_still() {
+    // A DI still whose green piles up at 0.62 (a sensor clip), red and blue below.
+    let refs = ChartEdition::After2014.xyz_d65();
+    let enc = |xyz: Vec3| -> [f64; 3] {
+        let d = (xyz_to_dwg() * xyz).map(di_encode);
+        [d.x, d.y.min(0.62), d.z]
+    };
+    let r = Render { corners: UPSIDE_DOWN, w: 960, h: 720 };
+    let data = render(&r, &|i| enc(cam() * refs[i] * 0.5), enc(whites::D65.to_xyz() * 0.004), &|t| enc(Vec3::new(0.9, 3.0, 1.0) * t * 20.0));
+    let img = ChartImage::from_rgb("clip.exr", r.w, r.h, data, true);
+    let a = analyze(&img, None, &ChartSettings::default()).unwrap();
+    assert_eq!(a.highlights.measured_source, ClipSource::Measured, "{:?}", a.clip);
+    assert!((a.highlights.clip_di - 0.62).abs() < 2e-3, "{}", a.highlights.clip_di);
+    assert!(!a.highlights.enabled);
+    // Set by hand wins.
+    let s = ChartSettings { highlights: HighlightSettings { enabled: true, clip_di: Some(0.7), ..Default::default() }, ..Default::default() };
+    let a = analyze(&img, None, &s).unwrap();
+    assert_eq!((a.highlights.clip_di, a.highlights.source), (0.7, ClipSource::Set));
+    // Nothing clips: the brightest value, flagged as such.
+    let img = di_still(UPSIDE_DOWN, cam(), 0.5);
+    let a = analyze(&img, None, &ChartSettings::default()).unwrap();
+    assert_eq!(a.highlights.source, ClipSource::Brightest);
 }
 
 #[test]

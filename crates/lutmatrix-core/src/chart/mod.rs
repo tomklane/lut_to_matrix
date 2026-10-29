@@ -6,13 +6,15 @@
 //! - [`detect`]: chart location, orientation, patch sampling, clip levels.
 //! - [`reference`]: the published patch values.
 //! - [`encoding`]: the still's curve and gamut (detected or chosen).
-//! - [`fit`]: matrix (and tone) correction; [`dctl`]: its DCTL.
+//! - [`fit`]: matrix (and tone) correction; [`dctl`]: its DCTL; [`highlights`]: the
+//!   DCTL's highlight protection.
 //! - [`odrt`]: an OpenDRT look preset fitted to the chart.
 
 pub mod dctl;
 pub mod detect;
 pub mod encoding;
 pub mod fit;
+pub mod highlights;
 pub mod image;
 pub mod odrt;
 pub mod reference;
@@ -22,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use self::detect::{clip_levels, find_lattice, placements, sample_patch, ClipLevels, Lattice, Orientation, PatchSample, Placement};
 use self::encoding::{guess_space, SpaceGuess, StillSpace};
 use self::fit::{fit_chart, ChartFit, FitPatch, FitSettings};
+use self::highlights::{HighlightSettings, Highlights};
 use self::image::{ChartImage, ImageInfo};
 use self::reference::{ChartEdition, NEUTRALS, PATCH_NAMES};
 use crate::difference::xyz_to_lab;
@@ -63,6 +66,8 @@ pub struct ChartSettings {
     pub mirrors: bool,
     pub fit: FitSettings,
     pub target: Target,
+    /// Highlight protection in the DCTL.
+    pub highlights: HighlightSettings,
 }
 
 impl Default for ChartSettings {
@@ -78,6 +83,7 @@ impl Default for ChartSettings {
             mirrors: false,
             fit: FitSettings::default(),
             target: Target::Reference,
+            highlights: HighlightSettings::default(),
         }
     }
 }
@@ -140,6 +146,8 @@ pub struct ChartAnalysis {
     pub patches: Vec<PatchReport>,
     pub fit: Option<ChartFit>,
     pub fit_error: Option<String>,
+    /// Highlight protection for the DCTL, with the clip level resolved.
+    pub highlights: Highlights,
     pub notes: Vec<String>,
 }
 
@@ -389,6 +397,7 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
         patches: reports,
         fit,
         fit_error,
+        highlights: Highlights::resolve(&s.highlights, &clip, &space),
         notes,
     })
 }
@@ -413,7 +422,13 @@ impl ChartAnalysis {
             model: match f.settings.model {
                 fit::Model::Matrix => "3x3 matrix in XYZ".to_string(),
                 fit::Model::MatrixTone => "per-channel tone curve in linear DWG + 3x3 matrix in XYZ".to_string(),
-            } + if f.settings.lock_neutral { ", neutral locked" } else { "" },
+            } + if f.settings.preserve_neutrals {
+                ", neutrals preserved (equal RGB stays equal)"
+            } else if f.settings.lock_neutral {
+                ", neutral locked"
+            } else {
+                ""
+            },
             exposure: match f.settings.exposure {
                 fit::Exposure::Match => format!(
                     "matched to the target (the still was {:+.2} stops from it; neutral gain x{:.3})",
@@ -432,7 +447,7 @@ impl ChartAnalysis {
     }
 
     pub fn dctl(&self, date: &str) -> Option<String> {
-        Some(dctl::chart_dctl(self.fit.as_ref()?, &self.dctl_meta(date)?))
+        Some(dctl::chart_dctl(self.fit.as_ref()?, &self.highlights, &self.dctl_meta(date)?))
     }
 }
 

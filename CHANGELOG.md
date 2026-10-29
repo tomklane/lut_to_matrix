@@ -6,6 +6,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Preserve neutrals** for chart corrections (DECISIONS D42): equal R, G, B stay equal,
+  like an RGB mixer whose rows sum to 1, so clipped white stays white. The grays then
+  keep the camera's cast, so white-balance in the raw decode first and fit a still
+  exported that way. The fit shows the camera's gray and what equal R, G, B becomes.
+- **Highlight protection** in the chart DCTL (D42): near the clip, clipped areas go to
+  white instead of the colour the correction would give them (e.g. a magenta sun under
+  water). The clip level is measured from the still (or set by hand); detection (any
+  channel or only all channels clipping), softness and strength are options in the app
+  and sliders in the DCTL. CLI: `--preserve-neutrals`, `--protect-highlights`,
+  `--clip-di`, `--highlight-softness`, `--highlight-detect`.
+
 ## [0.4.0] - 2026-10-29
 
 ### Added
