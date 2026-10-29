@@ -219,7 +219,7 @@ static float3 make_float3(float x, float y, float z) { float3 r; r.x = x; r.y = 
 #define _log2f log2f
 #define _fmaxf fmaxf
 #define _fminf fminf
-#define DEFINE_UI_PARAMS(name, label, kind, def, lo, hi, step) static float name = def;
+#define DEFINE_UI_PARAMS(name, label, kind, def, ...) static float name = def;
 "#;
 const MAIN: &str = r#"
 int main(void) {
@@ -235,12 +235,21 @@ int main(void) {
 #[test]
 fn chart_dctl_compiles_and_matches() {
     let img = di_still(UPSIDE_DOWN, cam(), 0.5);
-    let cases = [(Model::Matrix, false, false), (Model::MatrixTone, false, false), (Model::Matrix, true, true), (Model::MatrixTone, false, true)];
-    for (model, preserve, protect) in cases {
+    // (model, preserve neutrals, highlight protection, white balance checkbox)
+    let cases = [
+        (Model::Matrix, false, false, true),
+        (Model::MatrixTone, false, false, true),
+        (Model::Matrix, true, true, true),
+        (Model::MatrixTone, false, true, true),
+        (Model::Matrix, false, true, false),
+        (Model::MatrixTone, true, false, false),
+    ];
+    for (model, preserve, protect, wb) in cases {
         let s = ChartSettings {
             fit: lutmatrix_core::chart::fit::FitSettings { model, preserve_neutrals: preserve, ..Default::default() },
             // A clip inside the tested codes (up to 0.7), so the protection is exercised.
-            highlights: HighlightSettings { enabled: protect, clip_di: Some(0.55), softness: 1.5, strength: 0.9, detect: 0.3 },
+            highlights: HighlightSettings { enabled: protect, clip_di: Some(0.55), softness: 1.5, strength: 0.9 },
+            white_balance: wb,
             ..Default::default()
         };
         let mut a = analyze(&img, None, &s).unwrap();
@@ -254,9 +263,10 @@ fn chart_dctl_compiles_and_matches() {
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone);
         assert_eq!(src.contains("p_HlClip"), protect);
+        assert!(src.contains(&format!("DCTLUI_CHECK_BOX, {})", u8::from(wb))));
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
-        let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("c.dctl"), &src).unwrap();
         std::fs::write(dir.join("main.c"), format!("{SHIM}\n#include \"c.dctl\"\n{MAIN}")).unwrap();
@@ -266,7 +276,7 @@ fn chart_dctl_compiles_and_matches() {
                 Vec3::new((f * 0.137).fract() * 0.7, (f * 0.291).fract() * 0.7, (f * 0.533).fract() * 0.7)
             })
             .collect();
-        let want = |c: &Vec3| -> Vec3 { (xyz_to_dwg() * hl.apply(&fit, &c.map(di_decode))).map(di_encode) };
+        let want = |c: &Vec3| -> Vec3 { (xyz_to_dwg() * hl.apply(&fit, &c.map(di_decode), wb)).map(di_encode) };
         for (cc, args) in [("cc", vec!["-std=c99"]), ("c++", vec!["-x", "c++", "-std=c++14"])] {
             if Command::new(cc).arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
                 continue;
@@ -290,7 +300,7 @@ fn chart_dctl_compiles_and_matches() {
                 let got: Vec<f64> = line.split_whitespace().map(|v| v.parse().unwrap()).collect();
                 let w = want(&c.map(|v| v as f32 as f64));
                 for k in 0..3 {
-                    assert!((got[k] - w[k]).abs() < 2e-5 * w[k].abs().max(1.0), "{cc} {model:?} {preserve} {protect} {c:?}: {got:?} vs {w:?}");
+                    assert!((got[k] - w[k]).abs() < 2e-5 * w[k].abs().max(1.0), "{cc} {model:?} {preserve} {protect} {wb} {c:?}: {got:?} vs {w:?}");
                 }
             }
         }

@@ -68,6 +68,9 @@ pub struct ChartSettings {
     pub target: Target,
     /// Highlight protection in the DCTL.
     pub highlights: HighlightSettings,
+    /// The DCTL's white balance checkbox starts on (off: footage white-balanced in the
+    /// raw decode).
+    pub white_balance: bool,
 }
 
 impl Default for ChartSettings {
@@ -84,6 +87,7 @@ impl Default for ChartSettings {
             fit: FitSettings::default(),
             target: Target::Reference,
             highlights: HighlightSettings::default(),
+            white_balance: true,
         }
     }
 }
@@ -148,6 +152,8 @@ pub struct ChartAnalysis {
     pub fit_error: Option<String>,
     /// Highlight protection for the DCTL, with the clip level resolved.
     pub highlights: Highlights,
+    /// The DCTL's white balance checkbox starts on.
+    pub white_balance: bool,
     pub notes: Vec<String>,
 }
 
@@ -398,6 +404,7 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
         fit,
         fit_error,
         highlights: Highlights::resolve(&s.highlights, &clip, &space),
+        white_balance: s.white_balance,
         notes,
     })
 }
@@ -423,7 +430,7 @@ impl ChartAnalysis {
                 fit::Model::Matrix => "3x3 matrix in XYZ".to_string(),
                 fit::Model::MatrixTone => "per-channel tone curve in linear DWG + 3x3 matrix in XYZ".to_string(),
             } + if f.settings.preserve_neutrals {
-                ", neutrals preserved (equal RGB stays equal)"
+                ", neutrals preserved after the white balance (equal RGB stays equal)"
             } else if f.settings.lock_neutral {
                 ", neutral locked"
             } else {
@@ -447,7 +454,7 @@ impl ChartAnalysis {
     }
 
     pub fn dctl(&self, date: &str) -> Option<String> {
-        Some(dctl::chart_dctl(self.fit.as_ref()?, &self.highlights, &self.dctl_meta(date)?))
+        Some(dctl::chart_dctl(self.fit.as_ref()?, &self.highlights, self.white_balance, &self.dctl_meta(date)?))
     }
 }
 

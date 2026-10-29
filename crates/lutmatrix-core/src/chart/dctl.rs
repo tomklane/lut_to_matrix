@@ -1,8 +1,9 @@
 //! The chart correction as a DaVinci Resolve DCTL (DWG / DaVinci Intermediate in and
 //! out), in the same form as the LUT matrices (DECISIONS.md D21): explicit DWG_TO_XYZ,
 //! M_XYZ and XYZ_TO_DWG, an Amount slider, and for the tone model a per-channel curve in
-//! linear DWG before the matrix. Optionally highlight protection with its own sliders
-//! (DECISIONS.md D42, [`super::highlights`]).
+//! linear DWG before the matrix. The correction is split into a white balance (a
+//! checkbox) and the matrix after it, optionally with highlight protection and its own
+//! sliders (DECISIONS.md D42, [`super::highlights`]).
 
 use std::fmt::Write as _;
 
@@ -25,7 +26,7 @@ pub struct ChartMeta {
     pub date: String,
 }
 
-pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
+pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &ChartMeta) -> String {
     let mut s = String::new();
     let w = &mut s;
     let _ = writeln!(w, "// ============================================================================");
@@ -42,13 +43,13 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
     let _ = writeln!(w, "// Input and output: DaVinci Wide Gamut / DaVinci Intermediate. Apply it to");
     let _ = writeln!(w, "// footage from the same camera, decoded the same way as the chart still, in a");
     let _ = writeln!(w, "// DWG/DI timeline, before the output transform.");
-    if fit.tone.is_some() {
-        let _ = writeln!(w, "// Pipeline: DI -> linear DWG -> per-channel tone curve -> XYZ (DWG_TO_XYZ) ->");
-        let _ = writeln!(w, "// M_XYZ -> blended with the input by 'Amount' -> linear DWG (XYZ_TO_DWG) -> DI.");
-    } else {
-        let _ = writeln!(w, "// Pipeline: DI -> linear DWG -> XYZ (DWG_TO_XYZ) -> M_XYZ (blended by 'Amount')");
-        let _ = writeln!(w, "// -> linear DWG (XYZ_TO_DWG) -> DI.");
-    }
+    let _ = writeln!(w, "// Pipeline: DI -> linear DWG -> {}{}white balance (gains in linear DWG,", if hl.enabled { "highlight protection -> " } else { "" }, if fit.tone.is_some() { "per-channel tone curve -> " } else { "" });
+    let _ = writeln!(w, "// 'White Balance' on/off) -> XYZ (DWG_TO_XYZ) -> M_XYZ -> blended with the input");
+    let _ = writeln!(w, "// by 'Amount' -> linear DWG (XYZ_TO_DWG) -> DI.");
+    let _ = writeln!(w, "//");
+    let [gr, _, gb] = fit.wb_gains;
+    let _ = writeln!(w, "// White balance: R x{gr:.4}, G x1, B x{gb:.4} make the chart's gray neutral. Turn it");
+    let _ = writeln!(w, "// off for footage white-balanced in the raw decode (only the matrix runs then).");
     if hl.enabled {
         let src = match hl.source {
             ClipSource::Set => "set by hand".to_string(),
@@ -57,11 +58,10 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
             ClipSource::Default => "a typical value (the still says nothing): set it to where the footage clips".to_string(),
         };
         let _ = writeln!(w, "//");
-        let _ = writeln!(w, "// Highlight protection: from 'Highlight Softness' stops below 'Highlight Clip DI'");
-        let _ = writeln!(w, "// up to it ('Highlight Detect Any to All': 0 = any channel there, 1 = all of them),");
-        let _ = writeln!(w, "// the input is pulled towards its brightest channel");
-        let _ = writeln!(w, "// and the result towards a neutral of the same luminance, so clipped areas come");
-        let _ = writeln!(w, "// out white instead of the colour the correction would give them.");
+        let _ = writeln!(w, "// Highlight protection: each channel within 'Highlight Softness' stops of");
+        let _ = writeln!(w, "// 'Highlight Clip DI' is raised towards the camera's white (the chart's gray with");
+        let _ = writeln!(w, "// the white balance on, equal RGB with it off), so clipped areas come out white");
+        let _ = writeln!(w, "// instead of the colour the correction would give them.");
         let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&src));
     }
     let _ = writeln!(w, "//");
@@ -71,6 +71,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
     let _ = writeln!(w, "// ============================================================================");
     let _ = writeln!(w);
     let _ = writeln!(w, "DEFINE_UI_PARAMS(p_Amount, Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)");
+    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_WB, White Balance, DCTLUI_CHECK_BOX, {})", u8::from(white_balance));
     if hl.enabled {
         let f = |v: f64| format!("{v:.4}");
         let _ = writeln!(w, "DEFINE_UI_PARAMS(p_HlProtect, Highlight Protection, DCTLUI_SLIDER_FLOAT, {}, 0.0, 1.0, 0.01)", f(hl.strength));
@@ -88,7 +89,6 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
             f(SOFTNESS_RANGE.0),
             f(SOFTNESS_RANGE.1)
         );
-        let _ = writeln!(w, "DEFINE_UI_PARAMS(p_HlDetect, Highlight Detect Any to All, DCTLUI_SLIDER_FLOAT, {}, 0.0, 1.0, 0.01)", f(hl.detect));
     }
     let _ = writeln!(w);
     let _ = writeln!(w, "typedef struct");
@@ -104,8 +104,13 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
     let _ = writeln!(w, "}}");
     let _ = writeln!(w);
     matrix_fn(w, "DWG_TO_XYZ", "Linear DaVinci Wide Gamut -> CIE XYZ (D65).", &davinci::dwg_to_xyz());
-    matrix_fn(w, "M_XYZ", "Chart correction in linear CIE XYZ (D65): XYZ in -> XYZ out.", &fit.m_xyz);
+    matrix_fn(w, "M_XYZ", "Chart correction after the white balance, linear CIE XYZ (D65): XYZ in -> XYZ out.", &fit.m_xyz_after_wb);
     matrix_fn(w, "XYZ_TO_DWG", "CIE XYZ (D65) -> linear DaVinci Wide Gamut.", &davinci::xyz_to_dwg());
+    let _ = writeln!(w, "// White balance gains in linear DWG (after the tone curve, if any).");
+    for (k, ch) in ["R", "G", "B"].iter().enumerate() {
+        let _ = writeln!(w, "#define WB_{ch}        {}", lit(fit.wb_gains[k]));
+    }
+    let _ = writeln!(w);
     let _ = writeln!(w, "// DaVinci Intermediate (Blackmagic, DWG Intermediate v1.1).");
     for (k, v) in [("DI_A", DI_A), ("DI_B", DI_B), ("DI_C", DI_C), ("DI_M", DI_M), ("DI_LIN_CUT", DI_LIN_CUT), ("DI_LOG_CUT", DI_LOG_CUT)] {
         let _ = writeln!(w, "#define {k:<11} {}", lit(v));
@@ -124,19 +129,21 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
     let _ = writeln!(w, "}}");
     let _ = writeln!(w);
     if hl.enabled {
-        let _ = writeln!(w, "// Highlight protection weight for a linear DWG pixel: smoothstep from 'soft' stops");
-        let _ = writeln!(w, "// below the clip to the clip, times 'amount', on a level between the brightest");
-        let _ = writeln!(w, "// channel (detect = 0: any channel clipping) and the darkest (1: all of them).");
-        let _ = writeln!(w, "__DEVICE__ float highlight_weight(float3 dwg, float amount, float clip_di, float soft, float detect)");
+        let g = fit.gray_dwg;
+        let ok = g.iter().all(|v| v.is_finite() && *v > 1e-6);
+        let _ = writeln!(w, "// The camera's white in linear DWG (the chart's mid gray, green = 1).");
+        let _ = writeln!(w, "#define CAM_WHITE_R {}", lit(if ok { g[0] } else { 1.0 }));
+        let _ = writeln!(w, "#define CAM_WHITE_B {}", lit(if ok { g[2] } else { 1.0 }));
+        let _ = writeln!(w);
+        let _ = writeln!(w, "// One channel (linear DWG) raised towards 'est' by its highlight weight: smoothstep");
+        let _ = writeln!(w, "// from 'soft' stops below the clip to the clip, times 'amount'.");
+        let _ = writeln!(w, "__DEVICE__ float rebuild(float v, float est, float amount, float clip_di, float soft)");
         let _ = writeln!(w, "{{");
-        let _ = writeln!(w, "    float mx = _fmaxf(dwg.x, _fmaxf(dwg.y, dwg.z));");
-        let _ = writeln!(w, "    float mn = _fminf(dwg.x, _fminf(dwg.y, dwg.z));");
-        let _ = writeln!(w, "    float v = mx + (mn - mx) * detect;");
         let _ = writeln!(w, "    float lc = di_to_linear(clip_di);");
-        let _ = writeln!(w, "    if (amount <= 0.0f || v <= 0.0f || lc <= 0.0f) return 0.0f;");
+        let _ = writeln!(w, "    if (est <= v || amount <= 0.0f || v <= 0.0f || lc <= 0.0f) return v;");
         let _ = writeln!(w, "    float t = _log2f(v / lc) / _fmaxf(soft, 0.001f) + 1.0f;");
         let _ = writeln!(w, "    t = _fminf(_fmaxf(t, 0.0f), 1.0f);");
-        let _ = writeln!(w, "    return t * t * (3.0f - 2.0f * t) * amount;");
+        let _ = writeln!(w, "    return v + t * t * (3.0f - 2.0f * t) * amount * (est - v);");
         let _ = writeln!(w, "}}");
         let _ = writeln!(w);
     }
@@ -164,38 +171,30 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, meta: &ChartMeta) -> String {
     let _ = writeln!(w, "    float3 dwg = make_float3(di_to_linear(p_R), di_to_linear(p_G), di_to_linear(p_B));");
     let _ = writeln!(w, "    float3 xyz = mat_mul(DWG_TO_XYZ(), dwg);");
     let _ = writeln!(w);
-    let src = if hl.enabled {
-        let _ = writeln!(w, "    // Highlight protection: near the clip, pull the input towards its brightest channel");
-        let _ = writeln!(w, "    float hl = highlight_weight(dwg, p_HlProtect, p_HlClip, p_HlSoft, p_HlDetect);");
-        let _ = writeln!(w, "    float mx = _fmaxf(dwg.x, _fmaxf(dwg.y, dwg.z));");
-        let _ = writeln!(w, "    float3 src = make_float3(dwg.x + (mx - dwg.x) * hl, dwg.y + (mx - dwg.y) * hl, dwg.z + (mx - dwg.z) * hl);");
+    let mut cur = "dwg";
+    if hl.enabled {
+        let _ = writeln!(w, "    // Highlight protection: clipped channels towards the camera's white");
+        let _ = writeln!(w, "    float3 cw = p_WB ? make_float3(CAM_WHITE_R, 1.0f, CAM_WHITE_B) : make_float3(1.0f, 1.0f, 1.0f);");
+        let _ = writeln!(w, "    float sc = _fmaxf(dwg.x / cw.x, _fmaxf(dwg.y / cw.y, dwg.z / cw.z));");
+        let _ = writeln!(w, "    float3 src = make_float3(rebuild(dwg.x, sc * cw.x, p_HlProtect, p_HlClip, p_HlSoft),");
+        let _ = writeln!(w, "                             rebuild(dwg.y, sc * cw.y, p_HlProtect, p_HlClip, p_HlSoft),");
+        let _ = writeln!(w, "                             rebuild(dwg.z, sc * cw.z, p_HlProtect, p_HlClip, p_HlSoft));");
         let _ = writeln!(w);
-        "src"
-    } else {
-        "dwg"
-    };
+        cur = "src";
+    }
     if fit.tone.is_some() {
-        let _ = writeln!(w, "    // Tone curve, then the matrix");
+        let _ = writeln!(w, "    // Tone curve");
         let _ = writeln!(
             w,
-            "    float3 toned = make_float3(tone({src}.x, TONE_P_R, TONE_B_R), tone({src}.y, TONE_P_G, TONE_B_G), tone({src}.z, TONE_P_B, TONE_B_B));"
+            "    float3 bal = make_float3(tone({cur}.x, TONE_P_R, TONE_B_R), tone({cur}.y, TONE_P_G, TONE_B_G), tone({cur}.z, TONE_P_B, TONE_B_B));"
         );
-        let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), mat_mul(DWG_TO_XYZ(), toned));");
-    } else if hl.enabled {
-        let _ = writeln!(w, "    // The matrix");
-        let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), mat_mul(DWG_TO_XYZ(), src));");
     } else {
-        let _ = writeln!(w, "    // The matrix");
-        let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), xyz);");
+        let _ = writeln!(w, "    float3 bal = {cur};");
     }
-    if hl.enabled {
-        let _ = writeln!(w, "    // ... and the result towards a neutral of the same luminance");
-        let _ = writeln!(w, "    float3 white = mat_mul(DWG_TO_XYZ(), make_float3(1.0f, 1.0f, 1.0f));");
-        let _ = writeln!(w, "    float lum = _fmaxf(fit.y, 0.0f) / white.y;");
-        let _ = writeln!(w, "    fit = make_float3(fit.x + (white.x * lum - fit.x) * hl,");
-        let _ = writeln!(w, "                      fit.y + (white.y * lum - fit.y) * hl,");
-        let _ = writeln!(w, "                      fit.z + (white.z * lum - fit.z) * hl);");
-    }
+    let _ = writeln!(w, "    // White balance");
+    let _ = writeln!(w, "    if (p_WB) bal = make_float3(bal.x * WB_R, bal.y * WB_G, bal.z * WB_B);");
+    let _ = writeln!(w, "    // The matrix");
+    let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), mat_mul(DWG_TO_XYZ(), bal));");
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    xyz = make_float3(xyz.x + (fit.x - xyz.x) * p_Amount,");
     let _ = writeln!(w, "                      xyz.y + (fit.y - xyz.y) * p_Amount,");

@@ -251,12 +251,13 @@
   const odrtSmooth = $derived(o ? o.safety.roughness <= 1.5 * o.safety.stock_roughness : true);
   const unused = $derived(a ? a.patches.filter((p) => !p.used) : []);
   // Equal R, G, B through the matrix (linear DWG), brightest channel = 1.
-  const whiteOut = $derived.by(() => {
-    if (!f) return null;
-    const w = f.m_dwg.map((r) => r[0] + r[1] + r[2]);
+  function whiteThrough(m: number[][]): number[] | null {
+    const w = m.map((r) => r[0] + r[1] + r[2]);
     const mx = Math.max(...w);
     return mx > 0 ? w.map((v) => v / mx) : null;
-  });
+  }
+  const whiteOn = $derived(f ? whiteThrough(f.m_dwg) : null);
+  const whiteOff = $derived(f ? whiteThrough(f.m_dwg_after_wb) : null);
   function clipSourceText(s: string): string {
     return s === "measured"
       ? "measured in this still"
@@ -505,13 +506,13 @@
           </div>
           <div class="row">
             <div class="label">
-              Preserve neutrals<div class="sub">Equal R, G, B stay equal, so clipped white stays white. The grays keep the camera's cast: white-balance in the raw decode first</div>
+              Preserve neutrals<div class="sub">The matrix after the white balance keeps equal R, G, B equal: with the white balance off (footage balanced in the raw decode) clipped white stays white</div>
             </div>
             <div class="value"><Toggle bind:checked={app.chart.fit.preserve_neutrals} label="Preserve neutrals" /></div>
           </div>
           <div class="row" class:off={app.chart.fit.preserve_neutrals}>
             <div class="label">
-              Lock neutral<div class="sub">{app.chart.fit.preserve_neutrals ? "Off while neutrals are preserved" : "Grays land exactly on the target's gray"}</div>
+              Lock neutral<div class="sub">{app.chart.fit.preserve_neutrals ? "Not needed: the white balance makes the grays neutral" : "Grays land exactly on the target's gray"}</div>
             </div>
             <div class="value"><Toggle bind:checked={app.chart.fit.lock_neutral} label="Lock neutral" disabled={app.chart.fit.preserve_neutrals} /></div>
           </div>
@@ -531,11 +532,11 @@
           </div>
           {#if f}
             <div class="row mat">
-              <div class="label">Matrix<div class="sub">In linear DWG{f.tone ? ", after the tone curve" : ""}</div></div>
+              <div class="label">Matrix<div class="sub">In linear DWG, after the {f.tone ? "tone curve and " : ""}white balance</div></div>
               <div class="value num">
                 <table>
                   <tbody>
-                    {#each f.m_dwg as r}<tr>{#each r as v}<td>{fmt(v, 3)}</td>{/each}</tr>{/each}
+                    {#each f.m_dwg_after_wb as r}<tr>{#each r as v}<td>{fmt(v, 3)}</td>{/each}</tr>{/each}
                   </tbody>
                 </table>
               </div>
@@ -547,10 +548,21 @@
               </div>
             {/if}
             <div class="row">
-              <div class="label">Neutrals<div class="sub">The camera's gray, and what equal R, G, B (clipped white) becomes</div></div>
-              <div class="value num small">
-                gray {fmt(f.gray_dwg[0], 2)} : 1 : {fmt(f.gray_dwg[2], 2)} · white →
-                <span class:warnc={whiteOut && Math.min(...whiteOut) < 0.8}>{whiteOut ? whiteOut.map((v) => fmt(v, 2)).join(" : ") : "—"}</span>
+              <div class="label">
+                White balance<div class="sub">
+                  Gains in linear DWG before the matrix, for a camera gray of {fmt(f.gray_dwg[0], 2)} : 1 : {fmt(f.gray_dwg[2], 2)}. A checkbox in the DCTL: off for footage white-balanced in the raw decode
+                </div>
+              </div>
+              <div class="value">
+                <span class="num small">R ×{fmt(f.wb_gains[0], 3)} · B ×{fmt(f.wb_gains[2], 3)}</span>
+                <Toggle bind:checked={app.chart.white_balance} label="White balance on in the DCTL" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">Clipped white becomes<div class="sub">Equal R, G, B through the correction, R : G : B</div></div>
+              <div class="value num small nowrap">
+                WB on <span class:warnc={whiteOn && Math.min(...whiteOn) < 0.8}>{whiteOn ? whiteOn.map((v) => fmt(v, 2)).join(" : ") : "—"}</span>
+                · off <span class:warnc={whiteOff && Math.min(...whiteOff) < 0.8}>{whiteOff ? whiteOff.map((v) => fmt(v, 2)).join(" : ") : "—"}</span>
               </div>
             </div>
           {/if}
@@ -588,20 +600,6 @@
               </div>
             </div>
             <div class="row">
-              <div class="label">Detect<div class="sub">Which pixels count as clipped: any channel at the clip, or only all of them</div></div>
-              <div class="value">
-                <Segmented
-                  bind:value={app.chart.highlights.detect}
-                  label="Detect"
-                  options={[
-                    { value: 0, label: "Any channel", title: "Also pixels where only one channel clips (e.g. green around the sun under water): larger white areas" },
-                    { value: 0.5, label: "Between" },
-                    { value: 1, label: "All channels", title: "Only where every channel clips" },
-                  ]}
-                />
-              </div>
-            </div>
-            <div class="row">
               <div class="label">Softness<div class="sub">How far below the clip the protection starts</div></div>
               <div class="value">
                 <Segmented
@@ -615,7 +613,7 @@
                 />
               </div>
             </div>
-            <div class="row"><div class="faint small">All four are sliders in the DCTL too, to fine-tune in Resolve.</div></div>
+            <div class="row"><div class="faint small">Clipped channels are rebuilt towards the camera's white. Strength, clip level and softness are sliders in the DCTL too.</div></div>
           {/if}
           <div class="row go">
             <span class="grow"></span>
@@ -972,6 +970,9 @@
   input.clip {
     width: 84px;
     text-align: right;
+  }
+  .nowrap {
+    white-space: nowrap;
   }
   .warnc {
     color: var(--orange, var(--red));

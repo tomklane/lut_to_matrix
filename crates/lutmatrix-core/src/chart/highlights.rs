@@ -1,24 +1,21 @@
 //! Highlight protection for the chart DCTL (DECISIONS.md D42).
 //!
-//! A chart correction is fitted to real colours. Clipped pixels are not real colours:
-//! where every channel is clipped the file holds R = G = B, which the correction treats
-//! as "redder than this camera's white" under strongly coloured light and turns red; where
-//! only one channel is clipped the ratios are wrong and the correction swings them further.
-//! Near the clip level the protection therefore
-//! 1. pulls the input towards its brightest channel (a clipped pixel becomes neutral at
-//!    the clip, its most likely colour), and
-//! 2. pulls the output towards a neutral of the same luminance as the corrected pixel,
-//!    so clipped areas come out white at the brightness the correction gives them.
+//! A chart correction is fitted to real colours. Clipped pixels are not: where every
+//! channel clipped the file holds R = G = B, which under strongly coloured light is far
+//! redder than the camera's own white (under water the camera sees white as about
+//! 0.34 : 1 : 1.22), so the correction turns it red or magenta; where only green clipped
+//! the ratios are wrong in the same direction (a pink halo).
 //!
-//! The weight rises smoothly (smoothstep) from 0 at `softness` stops below the clip to
-//! `strength` at the clip. It is measured on a level between the brightest channel
-//! (`detect` = 0: any channel near the clip counts) and the darkest one (`detect` = 1:
-//! only pixels with every channel near the clip), in linear DWG. Under strongly coloured
-//! light one channel clips over large, otherwise fine areas (green around the sun under
-//! water) that the correction handles acceptably, while whitening them looks wrong, so the
-//! default is the darkest channel: only where everything clips (where the correction does
-//! the most damage, e.g. a red or magenta sun). The DCTL carries the same formulas with sliders
-//! for the strength, clip level, softness and detection.
+//! The protection rebuilds clipped channels towards the camera's white: of the colours
+//! with the camera's white balance, take the darkest that is at least as bright as the
+//! pixel in every channel (`gray · max_k(x_k / gray_k)`), and raise each channel towards
+//! it by that channel's own weight, which rises smoothly (smoothstep) from 0 at
+//! `softness` stops below the clip to `strength` at the clip. A fully clipped pixel
+//! becomes the camera's white, which the correction makes neutral; a channel that isn't
+//! near the clip is never touched, so bright but unclipped colours keep theirs. With the
+//! DCTL's white balance off (footage balanced in the raw decode) the camera's white is
+//! equal R, G, B. The DCTL carries the same formulas with sliders for the strength, clip
+//! level and softness.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,17 +38,11 @@ pub struct HighlightSettings {
     pub softness: f64,
     /// 0 = off … 1 = full.
     pub strength: f64,
-    /// Which channel decides: 0 = the brightest (any channel clipping) … 1 = the darkest
-    /// (only every channel clipping).
-    pub detect: f64,
 }
-
-/// Default for [`HighlightSettings::detect`].
-pub const DEFAULT_DETECT: f64 = 1.0;
 
 impl Default for HighlightSettings {
     fn default() -> Self {
-        HighlightSettings { enabled: false, clip_di: None, softness: 1.0, strength: 1.0, detect: DEFAULT_DETECT }
+        HighlightSettings { enabled: false, clip_di: None, softness: 1.0, strength: 1.0 }
     }
 }
 
@@ -80,7 +71,6 @@ pub struct Highlights {
     pub measured_source: ClipSource,
     pub softness: f64,
     pub strength: f64,
-    pub detect: f64,
 }
 
 /// DCTL slider range for the clip level.
@@ -129,15 +119,11 @@ impl Highlights {
             measured_source: msrc,
             softness: if s.softness.is_finite() { s.softness.clamp(SOFTNESS_RANGE.0, SOFTNESS_RANGE.1) } else { 1.0 },
             strength: if s.strength.is_finite() { s.strength.clamp(0.0, 1.0) } else { 1.0 },
-            detect: if s.detect.is_finite() { s.detect.clamp(0.0, 1.0) } else { DEFAULT_DETECT },
         }
     }
 
-    /// Protection weight for a linear DWG pixel (0 = untouched … strength).
-    pub fn weight(&self, dwg: &Vec3) -> f64 {
-        let mx = dwg.x.max(dwg.y).max(dwg.z);
-        let mn = dwg.x.min(dwg.y).min(dwg.z);
-        let v = mx + (mn - mx) * self.detect;
+    /// Protection weight of one channel value (linear DWG): 0 = untouched … strength.
+    pub fn weight(&self, v: f64) -> f64 {
         let lc = davinci::di_decode(self.clip_di);
         if self.strength <= 0.0 || v <= 0.0 || lc <= 0.0 {
             return 0.0;
@@ -146,18 +132,36 @@ impl Highlights {
         t * t * (3.0 - 2.0 * t) * self.strength
     }
 
-    /// The protected correction of a linear DWG pixel, CIE XYZ (D65) out. Without
-    /// protection this is `fit.apply(DWG_TO_XYZ · dwg)`.
-    pub fn apply(&self, fit: &ChartFit, dwg: &Vec3) -> Vec3 {
-        if !self.enabled {
-            return fit.apply(&(davinci::dwg_to_xyz() * dwg));
+    /// The camera's white the clipped channels are rebuilt towards (linear DWG, green =
+    /// 1): the chart's gray with the white balance on, equal R, G, B without.
+    pub fn camera_white(fit: &ChartFit, white_balance: bool) -> Vec3 {
+        let g = Vec3::from(fit.gray_dwg);
+        if white_balance && g.iter().all(|v| v.is_finite() && *v > 1e-6) {
+            g
+        } else {
+            Vec3::repeat(1.0)
         }
-        let h = self.weight(dwg);
-        let mx = dwg.x.max(dwg.y).max(dwg.z);
-        let src = dwg + (Vec3::repeat(mx) - dwg) * h;
-        let out = fit.apply(&(davinci::dwg_to_xyz() * src));
-        let white = davinci::dwg_to_xyz() * Vec3::repeat(1.0);
-        let neutral = white * (out.y.max(0.0) / white.y);
-        out + (neutral - out) * h
+    }
+
+    /// A linear DWG pixel with its clipped channels rebuilt towards `white`.
+    pub fn rebuild(&self, dwg: &Vec3, white: &Vec3) -> Vec3 {
+        if !self.enabled {
+            return *dwg;
+        }
+        let s = (0..3).map(|k| dwg[k] / white[k]).fold(f64::NEG_INFINITY, f64::max);
+        Vec3::from_fn(|k, _| {
+            let est = s * white[k];
+            if est > dwg[k] {
+                dwg[k] + self.weight(dwg[k]) * (est - dwg[k])
+            } else {
+                dwg[k]
+            }
+        })
+    }
+
+    /// The DCTL's result for a linear DWG pixel, CIE XYZ (D65) out (`Amount` = 1).
+    pub fn apply(&self, fit: &ChartFit, dwg: &Vec3, white_balance: bool) -> Vec3 {
+        let src = self.rebuild(dwg, &Self::camera_white(fit, white_balance));
+        fit.apply_wb(&(davinci::dwg_to_xyz() * src), white_balance)
     }
 }

@@ -7,16 +7,20 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **Preserve neutrals** for chart corrections (DECISIONS D42): equal R, G, B stay equal,
-  like an RGB mixer whose rows sum to 1, so clipped white stays white. The grays then
-  keep the camera's cast, so white-balance in the raw decode first and fit a still
-  exported that way. The fit shows the camera's gray and what equal R, G, B becomes.
-- **Highlight protection** in the chart DCTL (D42): near the clip, clipped areas go to
-  white instead of the colour the correction would give them (e.g. a magenta sun under
-  water). The clip level is measured from the still (or set by hand); detection (any
-  channel or only all channels clipping), softness and strength are options in the app
-  and sliders in the DCTL. CLI: `--preserve-neutrals`, `--protect-highlights`,
-  `--clip-di`, `--highlight-softness`, `--highlight-detect`.
+- **White balance in the chart DCTL** (DECISIONS D42): the correction is now a white
+  balance (per-channel gains in linear DWG) followed by the matrix, with a *White
+  Balance* checkbox in the DCTL. On, it is the same correction as before; off, only the
+  matrix runs, for footage white-balanced in the raw decode. The app shows the gains.
+- **Preserve neutrals** for chart corrections (D42): the matrix after the white balance
+  keeps equal R, G, B equal, like an RGB mixer whose rows sum to 1, so with the white
+  balance off clipped white stays white. Costs almost nothing in accuracy. The fit shows
+  the camera's gray and what equal R, G, B becomes with the white balance on and off.
+- **Highlight protection** in the chart DCTL (D42): clipped channels are rebuilt towards
+  the camera's own white, so a clipped sun comes out white instead of red or magenta,
+  without touching bright colours that aren't clipped. The clip level is measured from
+  the still (or set by hand); strength, clip level and softness are sliders in the DCTL.
+  CLI: `--preserve-neutrals`, `--protect-highlights`, `--clip-di`,
+  `--highlight-softness`, `--no-white-balance`.
 
 ## [0.4.0] - 2026-10-29
 

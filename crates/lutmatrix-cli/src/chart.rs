@@ -62,10 +62,10 @@ pub struct ChartArgs {
     /// Highlight protection transition below the clip, stops.
     #[arg(long, default_value_t = 1.0)]
     highlight_softness: f64,
-    /// Which channel triggers the protection: 0 = any channel near the clip … 1 = only
-    /// all of them.
-    #[arg(long, default_value_t = lutmatrix_core::chart::highlights::DEFAULT_DETECT)]
-    highlight_detect: f64,
+    /// The DCTL's white balance checkbox starts off (footage white-balanced in the raw
+    /// decode).
+    #[arg(long)]
+    no_white_balance: bool,
     /// Patches to leave out, 1–24 (chart numbering).
     #[arg(long, value_delimiter = ',')]
     exclude: Vec<usize>,
@@ -185,7 +185,7 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     s.highlights.enabled = args.protect_highlights;
     s.highlights.clip_di = args.clip_di;
     s.highlights.softness = args.highlight_softness;
-    s.highlights.detect = args.highlight_detect;
+    s.white_balance = !args.no_white_balance;
     if let Some(t) = &args.target {
         let ts = ChartSettings { space: None, corners: None, orientation: None, exclude: Vec::new(), ..s.clone() };
         let partial = space(&args.target_curve, &args.target_gamut)?;
@@ -294,14 +294,17 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
             );
             println!("  ΔE2000      mean {:.2} → {:.2}, max {:.2}, neutrals {:.2}; {} patches", f.mean_before, f.mean_after, f.max_after, f.neutral_after, f.used);
             let [gr, _, gb] = f.gray_dwg;
-            let w = f.m_dwg * lutmatrix_core::math::Vec3::repeat(1.0);
+            let ratio = |m: &lutmatrix_core::math::Mat3| {
+                let w = m * lutmatrix_core::math::Vec3::repeat(1.0);
+                format!("{:.3} : {:.3} : {:.3}", w.x / w.max(), w.y / w.max(), w.z / w.max())
+            };
             println!(
-                "  Neutrals    {}; camera gray R {gr:.3} : G 1 : B {gb:.3} (DWG); equal RGB → {:.3} : {:.3} : {:.3}",
+                "  Neutrals    {}; camera gray R {gr:.3} : G 1 : B {gb:.3} (DWG); equal RGB → {} (white balance off: {})",
                 if f.settings.preserve_neutrals { "preserved" } else if f.settings.lock_neutral { "locked" } else { "free" },
-                w.x / w.max(),
-                w.y / w.max(),
-                w.z / w.max()
+                ratio(&f.m_dwg),
+                ratio(&f.m_dwg_after_wb)
             );
+            println!("  White bal.  R ×{:.4}, G ×1, B ×{:.4} (linear DWG)", f.wb_gains[0], f.wb_gains[2]);
             println!("  M_XYZ       {:?}", [f.m_xyz.row(0), f.m_xyz.row(1), f.m_xyz.row(2)].map(|r| [r[0], r[1], r[2]].map(|v| (v * 1e5).round() / 1e5)));
             if let Some(t) = &f.tone {
                 println!("  Tone        power {:?}, black {:?}", t.power.map(|v| (v * 1e4).round() / 1e4), t.black.map(|v| (v * 1e5).round() / 1e5));
@@ -316,7 +319,7 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
         h.clip_di,
         h.source,
         if h.source == lutmatrix_core::chart::highlights::ClipSource::Set { format!("; still {:.4} {:?}", h.measured_di, h.measured_source) } else { String::new() },
-        if h.enabled { format!("; protection on, softness {:.2} stops, detect {:.2}", h.softness, h.detect) } else { "; protection off".into() }
+        if h.enabled { format!("; protection on, softness {:.2} stops", h.softness) } else { "; protection off".into() }
     );
     for n in &a.notes {
         println!("  Note        {n}");

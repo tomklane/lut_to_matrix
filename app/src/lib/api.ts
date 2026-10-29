@@ -449,10 +449,8 @@ export interface HighlightSettings {
   clip_di: number | null;
   softness: number;
   strength: number;
-  /** 0 = any channel near the clip … 1 = only all of them. */
-  detect: number;
 }
-export const defaultHighlights: HighlightSettings = { enabled: false, clip_di: null, softness: 1, strength: 1, detect: 1 };
+export const defaultHighlights: HighlightSettings = { enabled: false, clip_di: null, softness: 1, strength: 1 };
 export type ClipSource = "set" | "measured" | "brightest" | "default";
 export interface Highlights {
   enabled: boolean;
@@ -462,7 +460,6 @@ export interface Highlights {
   measured_source: ClipSource;
   softness: number;
   strength: number;
-  detect: number;
 }
 export interface ChartSettings {
   edition: ChartEdition;
@@ -475,6 +472,8 @@ export interface ChartSettings {
   mirrors: boolean;
   fit: ChartFitSettings;
   highlights: HighlightSettings;
+  /** The DCTL's white balance checkbox starts on. */
+  white_balance: boolean;
 }
 export const defaultChartFit: ChartFitSettings = {
   model: "matrix",
@@ -534,6 +533,10 @@ export interface ChartFit {
   used: number;
   /** The camera's mid gray in linear DWG, green = 1. */
   gray_dwg: [number, number, number];
+  /** White balance gains in linear DWG (green = 1), before the matrix. */
+  wb_gains: [number, number, number];
+  m_xyz_after_wb: Mat3;
+  m_dwg_after_wb: Mat3;
   notes: string[];
 }
 export interface ChartAnalysis {
@@ -559,6 +562,7 @@ export interface ChartAnalysis {
   fit: ChartFit | null;
   fit_error: string | null;
   highlights: Highlights;
+  white_balance: boolean;
   notes: string[];
 }
 export interface ChartPreview {
