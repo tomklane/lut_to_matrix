@@ -7,9 +7,9 @@
 //!
 //! Names: a stacked pair is called `negative_print`, using only film stocks:
 //! - negative: the camera stock number from the file name plus any pull/push
-//!   (`AWG4LC4_to_5201_pull2.cube` → `5201pull2`);
+//!   (`LogC4_to_5213_pull2.cube` → `5213pull2`);
 //! - print: from the user's [`StockNames`] table, which maps look codes and profile
-//!   variants to words (`DLook4-N_gn_V2_…` → `2383v1_D60_Neutralized_V2`); a creative
+//!   variants to words (`Look4-N_gn_V2_…` → `2383v1_D60_Neutralized_V2`); a creative
 //!   white move `DxxtoDyy_Bradford` adds `_Dyy`.
 //!   The table is the user's (it describes their LUT pack), so it lives in their data
 //!   folder, not in the app.
@@ -52,8 +52,8 @@ impl Transform for Stack {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StockNames {
-    /// Look code → stock name, e.g. "DLook4" → "2383v1". Matched at the start of the
-    /// file name, case-insensitively, and only as a whole code ("DLook4" ≠ "DLook42").
+    /// Look code → stock name, e.g. "Look4" → "2383v1". Matched at the start of the
+    /// file name, case-insensitively, and only as a whole code ("Look4" ≠ "Look42").
     pub looks: BTreeMap<String, String>,
     /// Variant code → word, e.g. "N" → "D60", "U" → "3514DIConstrain".
     pub variants: BTreeMap<String, String>,
@@ -71,7 +71,7 @@ fn prefix_match<'a>(table: &'a BTreeMap<String, String>, stem: &str) -> Option<(
     keys.into_iter().find(|(k, _)| {
         let k = k.to_ascii_lowercase();
         let rest = lower.strip_prefix(k.as_str());
-        // A whole code: followed by a separator, the end, or "Profile" ("Dlook4bProfile_To_…").
+        // A whole code: followed by a separator, the end, or "Profile" ("Look4bProfile_To_…").
         rest.is_some_and(|r| r.chars().next().is_none_or(|c| !c.is_ascii_alphanumeric()) || r.starts_with("profile"))
     })
 }
@@ -85,7 +85,7 @@ fn stem_of(file_name: &str) -> &str {
 pub struct PrintName {
     /// The full name, e.g. "2383v1_D60_Neutralized_V2".
     pub name: String,
-    /// The look code as written in the table ("DLook4").
+    /// The look code as written in the table ("Look4").
     pub look: String,
     /// The variant code ("N"), if the file has one.
     pub variant: Option<String>,
@@ -114,7 +114,7 @@ impl StockNames {
     /// caller falls back to the file name, and the user can rename).
     pub fn print_name(&self, file_name: &str) -> Option<PrintName> {
         let stem = stem_of(file_name);
-        // Longest code first, so "DLook10" wins over "DLook1".
+        // Longest code first, so "Look10" wins over "Look1".
         let (code, stock) = prefix_match(&self.looks, stem)?;
         let rest = &stem[code.len()..];
         let mut parts = vec![stock.clone()];
@@ -152,7 +152,7 @@ impl StockNames {
     }
 
     /// The name of a negative: a table entry, else the camera stock number and pull/push
-    /// ("5201pull2"), else "FilmLog" for a film-log transform without a stock.
+    /// ("5213pull2"), else "FilmLog" for a film-log transform without a stock.
     pub fn negative_name(&self, file_name: &str) -> Option<String> {
         let stem = stem_of(file_name);
         if let Some((_, n)) = prefix_match(&self.negatives, stem) {
@@ -164,8 +164,8 @@ impl StockNames {
     /// The name of a full LUT (camera log → display), matched on its own:
     /// - `[33X_]LogC33_` / `LogC34_` + a print → `FilmLog_<print name>` (they are the
     ///   FilmLog input transform baked in front of that print);
-    /// - a negative stock and a print stock in the name (`…5207_pull2_K2393…`) →
-    ///   `5207pull2_2393`;
+    /// - a negative stock and a print stock in the name (`…5213_pull2_K2383…`) →
+    ///   `5213pull2_2383`;
     /// - else the stock-names table, if it knows the file.
     pub fn full_name(&self, file_name: &str) -> Option<String> {
         let stem = stem_of(file_name);
@@ -196,7 +196,7 @@ impl StockNames {
 }
 
 /// Names that come out the same get a lowercase letter each, in order: a, b, c … z,
-/// aa, ab … ("5219JBs1" ×2 → "5219JBs1a", "5219JBs1b"). Unique names are left alone.
+/// aa, ab … ("5219x" ×2 → "5219xa", "5219xb"). Unique names are left alone.
 pub fn dedupe(names: &mut [String]) {
     let mut count = std::collections::HashMap::new();
     for n in names.iter() {
@@ -242,7 +242,7 @@ fn revision_re() -> &'static Regex {
 }
 
 /// The negative's name from its file name: the camera stock number plus any pull/push
-/// ("5201pull2"). `None` if no stock number is found.
+/// ("5213pull2"). `None` if no stock number is found.
 pub fn negative_name(file_name: &str) -> Option<String> {
     static STOCK: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static PUSH: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
@@ -359,7 +359,7 @@ mod tests {
     fn names() -> StockNames {
         let m = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
         StockNames {
-            looks: m(&[("DLook1", "1111"), ("DLook10", "2393v2"), ("DLook4", "2383v1")]),
+            looks: m(&[("Look1", "1111"), ("Look10", "2393v2"), ("Look4", "2383v1")]),
             variants: m(&[("NAT", "Native"), ("N", "D60"), ("P3", "DCI"), ("U", "3514DIConstrain")]),
             flags: m(&[("gn", "Neutralized")]),
             ..StockNames::default()
@@ -369,19 +369,19 @@ mod tests {
     #[test]
     fn print_names_follow_the_table() {
         let n = names();
-        let p = n.print_name("DLook4-N_gn_V2_Profile_To_Rec709_2-4_G1_Og1_P1_LumToZero.dat").unwrap();
+        let p = n.print_name("Look4-N_gn_V2_Profile_To_Rec709_2-4_G1_Og1_P1_LumToZero.dat").unwrap();
         assert_eq!(p.name, "2383v1_D60_Neutralized_V2");
-        assert_eq!((p.look.as_str(), p.variant.as_deref(), p.revision.as_deref()), ("DLook4", Some("N"), Some("V2")));
+        assert_eq!((p.look.as_str(), p.variant.as_deref(), p.revision.as_deref()), ("Look4", Some("N"), Some("V2")));
         assert_eq!(p.flags, vec!["gn"]);
-        assert_eq!(n.print_name("Dlook4-NAT_Profile_To_Rec709.dat").unwrap().name, "2383v1_Native", "case-insensitive");
-        assert_eq!(n.print_name("Dlook4Profile_To_Rec709.dat").unwrap().name, "2383v1", "code run into 'Profile'");
-        assert!(n.print_name("DLook42Profile_To_Rec709.dat").is_none(), "DLook4 is not DLook42");
-        assert_eq!(n.print_name("DLook10-P3_gn_Profile.dat").unwrap().name, "2393v2_DCI_Neutralized", "DLook10, not DLook1");
-        assert_eq!(n.print_name("DLook10-U_Profile.dat").unwrap().name, "2393v2_3514DIConstrain");
-        assert!(n.print_name("DLook42D60ToDciP3_To_Rec709.dat").is_none(), "DLook4 is not a prefix of DLook42");
+        assert_eq!(n.print_name("look4-NAT_Profile_To_Rec709.dat").unwrap().name, "2383v1_Native", "case-insensitive");
+        assert_eq!(n.print_name("look4Profile_To_Rec709.dat").unwrap().name, "2383v1", "code run into 'Profile'");
+        assert!(n.print_name("Look42Profile_To_Rec709.dat").is_none(), "Look4 is not Look42");
+        assert_eq!(n.print_name("Look10-P3_gn_Profile.dat").unwrap().name, "2393v2_DCI_Neutralized", "Look10, not Look1");
+        assert_eq!(n.print_name("Look10-U_Profile.dat").unwrap().name, "2393v2_3514DIConstrain");
+        assert!(n.print_name("Look42D60ToDciP3_To_Rec709.dat").is_none(), "Look4 is not a prefix of Look42");
         assert!(n.print_name("Other.cube").is_none());
         assert_eq!(
-            n.print_name("DLook10-NAT_Profile_To_DciP3_2-6_G1_Og1_D55toD58_Bradford_P1_LumToZero.dat").unwrap().name,
+            n.print_name("Look10-NAT_Profile_To_DciP3_2-6_G1_Og1_D55toD58_Bradford_P1_LumToZero.dat").unwrap().name,
             "2393v2_Native_D58",
             "creative white move"
         );
@@ -391,19 +391,19 @@ mod tests {
     fn full_lut_names() {
         let n = names();
         assert_eq!(
-            n.full_name("LogC34_DLook4-N_gn_V2_Profile_To_DciP3_2-6_G1_Og1_P1_LumToZero.dat").as_deref(),
+            n.full_name("LogC34_Look4-N_gn_V2_Profile_To_DciP3_2-6_G1_Og1_P1_LumToZero.dat").as_deref(),
             Some("FilmLog_2383v1_D60_Neutralized_V2")
         );
-        assert_eq!(n.full_name("33X_LogC33_Ulook4b_To_Rec709_2-4_G1_Og1_P1_LumToZero.cube").as_deref(), Some("FilmLog_Ulook4b"));
-        assert_eq!(n.full_name("ACES2065_to_5207_pull2_K2393_D65_709G24.cube").as_deref(), Some("5207pull2_2393"));
-        assert_eq!(n.name_for(Stage::Full, "AlexaV3_K1S1_LogC2Video_Rec709_EE.cube"), "AlexaV3_K1S1_LogC2Video_Rec709_EE");
+        assert_eq!(n.full_name("33X_LogC33_Grade7_To_Rec709_2-4_G1_Og1_P1_LumToZero.cube").as_deref(), Some("FilmLog_Grade7"));
+        assert_eq!(n.full_name("ACES2065_to_5213_pull2_K2383_709G24.cube").as_deref(), Some("5213pull2_2383"));
+        assert_eq!(n.name_for(Stage::Full, "Alexa_LookA_LogC2Video_Rec709.cube"), "Alexa_LookA_LogC2Video_Rec709");
     }
 
     #[test]
     fn duplicates_get_letters() {
-        let mut v: Vec<String> = ["FilmLog", "5201pull2", "FilmLog", "FilmLog"].iter().map(|s| s.to_string()).collect();
+        let mut v: Vec<String> = ["FilmLog", "5213pull2", "FilmLog", "FilmLog"].iter().map(|s| s.to_string()).collect();
         dedupe(&mut v);
-        assert_eq!(v, ["FilmLoga", "5201pull2", "FilmLogb", "FilmLogc"]);
+        assert_eq!(v, ["FilmLoga", "5213pull2", "FilmLogb", "FilmLogc"]);
         let mut many: Vec<String> = vec!["x".into(); 28];
         dedupe(&mut many);
         assert_eq!((many[0].as_str(), many[25].as_str(), many[26].as_str(), many[27].as_str()), ("xa", "xz", "xaa", "xab"));
@@ -411,16 +411,16 @@ mod tests {
 
     #[test]
     fn negative_names_keep_stock_and_pull_push() {
-        assert_eq!(negative_name("AWG4LC4_to_5201_pull2.cube").as_deref(), Some("5201pull2"));
+        assert_eq!(negative_name("LogC4_to_5213_pull2.cube").as_deref(), Some("5213pull2"));
         assert_eq!(negative_name("LogC3_5219_Push1.cube").as_deref(), Some("5219push1"));
-        assert_eq!(negative_name("ACES2065_to_5207_neg.cube").as_deref(), Some("5207"));
+        assert_eq!(negative_name("ACES2065_to_5213_neg.cube").as_deref(), Some("5213"));
         assert_eq!(negative_name("Eterna_8543.cube").as_deref(), Some("8543"));
         assert_eq!(negative_name("LogC4_to_Rec709.cube"), None, "no stock number");
-        assert_eq!(pair_name("5201pull2", "2383v1_Native"), "5201pull2_2383v1_Native");
+        assert_eq!(pair_name("5213pull2", "2383v1_Native"), "5213pull2_2383v1_Native");
         let n = names();
         assert_eq!(n.negative_name("ARRILogCWG_to_34FilmLog.cube").as_deref(), Some("FilmLog"));
         assert_eq!(n.negative_name("LogCv3ToFilmLogInput33.cube").as_deref(), Some("FilmLog"));
-        assert_eq!(n.negative_name("AWG4LC4_to_5201_pull2.cube").as_deref(), Some("5201pull2"));
+        assert_eq!(n.negative_name("LogC4_to_5213_pull2.cube").as_deref(), Some("5213pull2"));
         assert_eq!(n.name_for(Stage::Negative, "Mystery.cube"), "Mystery");
     }
 

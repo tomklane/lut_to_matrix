@@ -75,10 +75,10 @@
   type TableKey = "looks" | "variants" | "flags" | "negatives";
   let names = $state<Record<TableKey, Row[]>>({ looks: [], variants: [], flags: [], negatives: [] });
   const tables: { key: TableKey; title: string; sub: string; ph: Row }[] = [
-    { key: "looks", title: "Looks", sub: "Look code at the start of a print's file name → stock name", ph: ["DLook4", "2383v1"] },
+    { key: "looks", title: "Looks", sub: "Look code at the start of a print's file name → stock name", ph: ["Look4", "2383v1"] },
     { key: "variants", title: "Variants", sub: "Code after the look's dash → word", ph: ["N", "D60"] },
     { key: "flags", title: "Flags", sub: "Code after the variant → word", ph: ["gn", "Neutralized"] },
-    { key: "negatives", title: "Negatives", sub: "Start of a negative's file name → name (when the stock number isn't in it)", ph: ["k8Film5219", "5219k8"] },
+    { key: "negatives", title: "Negatives", sub: "Start of a negative's file name → name (when the stock number isn't in it)", ph: ["MyNeg", "5219custom"] },
   ];
   function toRows(s: StockNames) {
     return {
@@ -324,7 +324,7 @@
       <div class="label" style="flex: 1 1 auto; min-width: 0">
         Print names from your stock-names table
         <div class="sub">
-          e.g. DLook4-N_gn_V2 → 2383v1_D60_Neutralized_V2 (a white move D55toD58 adds _D58). Negatives are named from the stock number and
+          e.g. Look4-N_gn_V2 → 2383v1_D60_Neutralized_V2 (a white move D55toD58 adds _D58). Negatives are named from the stock number and
           pull/push in their file names, or FilmLog; full LogC33_/LogC34_ LUTs become FilmLog_ + the print name.
         </div>
       </div>

@@ -38,9 +38,9 @@ const cameras: [string, string, string, boolean][] = [
 let presets: PresetRow[] = params.has("empty")
   ? []
   : [
-      { name: "LUT Match K1S1", created: "2026-10-17", source_lut: "AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d.cube", grey_nits: 10.84, error: ["ΔE2000", 0.86], stock_error: 2.8, notes: [] },
-      { name: "LUT Match Ulook4b", created: "2026-10-17", source_lut: "LogC33_Ulook4b_Rec709.cube", grey_nits: 4.45, error: ["ΔE2000", 2.3], stock_error: 10.47, notes: [] },
-      { name: "LUT Match 5207 Pull2 2393", created: "2026-10-17", source_lut: "ACES2065_to_5207_pull2_K2393_D65_709G24.cube", grey_nits: 9.49, error: ["ΔE2000", 2.37], stock_error: 4.9, notes: ["luminance fell with rising exposure for 7 colour(s); refitted with brilliance frozen"] },
+      { name: "LUT Match Look A", created: "2026-10-17", source_lut: "LookA_LogC3_Rec709.cube", grey_nits: 10.84, error: ["ΔE2000", 0.86], stock_error: 2.8, notes: [] },
+      { name: "LUT Match Look B", created: "2026-10-17", source_lut: "LookB_LogC3_Rec709.cube", grey_nits: 4.45, error: ["ΔE2000", 2.3], stock_error: 10.47, notes: [] },
+      { name: "LUT Match Print C", created: "2026-10-17", source_lut: "ACES2065_to_PrintC_709G24.cube", grey_nits: 9.49, error: ["ΔE2000", 2.37], stock_error: 4.9, notes: ["luminance fell with rising exposure for 7 colour(s); refitted with brilliance frozen"] },
     ];
 
 export async function mockInvoke(cmd: string, args: Record<string, any> = {}): Promise<unknown> {
@@ -59,8 +59,8 @@ export async function mockInvoke(cmd: string, args: Record<string, any> = {}): P
     case "save_prefs":
       return null;
     case "initial_file":
-      if (params.has("still")) return "/Users/you/Stills/Still 2026-10-29 110516_1.29.1.T.tif";
-      return params.has("lut") ? "/Users/you/LUTs/AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d.cube" : null;
+      if (params.has("still")) return "/Users/you/Stills/Chart still.tif";
+      return params.has("lut") ? "/Users/you/LUTs/LookA_LogC3_Rec709.cube" : null;
     case "load_lut": {
       const d = (await fx("inspect.json"))[0];
       await sleep(150);
@@ -81,7 +81,7 @@ export async function mockInvoke(cmd: string, args: Record<string, any> = {}): P
       await sleep(400);
       return fx(args.req.through ? "analysis_through.json" : "analysis.json");
     case "default_dctl_name":
-      return "AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d_MXYZ.dctl";
+      return "LookA_LogC3_Rec709_MXYZ.dctl";
     case "export_dctl":
       return { dctl: args.dctlPath, json: "", txt: "" };
     case "matrix_text":
@@ -92,11 +92,11 @@ export async function mockInvoke(cmd: string, args: Record<string, any> = {}): P
     case "presets_list":
       return { dir: "/Users/you/Library/Application Support/LUT Matrix/opendrt-presets", presets, problems: [] };
     case "default_preset_name":
-      return "LUT Match AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d";
+      return "LUT Match LookA_LogC3_Rec709";
     case "preset_exists":
       return presets.some((p) => p.name.toLowerCase() === String(args.name).toLowerCase());
     case "preset_save":
-      presets = [...presets.filter((p) => p.name !== args.name), { name: args.name, created: "2026-10-17", source_lut: "K1S1.cube", grey_nits: 10.84, error: ["ΔE2000", 0.86], stock_error: 2.8, notes: [] }];
+      presets = [...presets.filter((p) => p.name !== args.name), { name: args.name, created: "2026-10-17", source_lut: "LookA.cube", grey_nits: 10.84, error: ["ΔE2000", 0.86], stock_error: 2.8, notes: [] }];
       return args.name;
     case "preset_remove":
       presets = presets.filter((p) => p.name !== args.name);

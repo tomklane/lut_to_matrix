@@ -174,8 +174,7 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Header date is UTC.
 
 ## D22 — Validation in Resolve (2026-10-16) and the double-counting problem
-- User test: synthetic ColorChecker in LogC3 EI800, Resolve on macOS (Metal). K1S1 and
-  Ulook4b LUTs vs our D65 DCTLs followed by a Resolve CST (with tone mapping) or by
+- User test: synthetic ColorChecker in LogC3 EI800, Resolve on macOS (Metal). two look LUTs (A, B) vs our D65 DCTLs followed by a Resolve CST (with tone mapping) or by
   OpenDRT v1.1.0 (Standard look, ACES-2.0 tonescale, Rec.1886/709, 100 nit, grey 10 nit).
 - Implementation verified: our tetrahedral LUT evaluation, our compiled build of the user's
   OpenDRT DCTL, and our prediction of "DCTL → OpenDRT" all match the Resolve exports to
@@ -183,16 +182,16 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Finding: fitting M against plain colorimetry (scene XYZ → LUT display XYZ) captures
   the LUT's whole rendering, including saturation its tone curve adds. A downstream DRT
   then adds its own, so the result can be *further* from the LUT than the DRT alone
-  (K1S1 + OpenDRT, colour patches, exposure matched: 2.83 ΔE00 with matrix vs 2.13 without).
+  (look A + OpenDRT, colour patches, exposure matched: 2.83 ΔE00 with matrix vs 2.13 without).
 - Fitting M **through** the downstream DRT — minimise ΔE(DRT(M·x), LUT(x)), exposure
   matched per level, D65 neutral locked, hue ring at −1/0/+1 stops — fixes this on the
-  held-out chart: K1S1 1.76 (vs 2.13 without matrix), Ulook4b 4.61 (vs 5.44).
+  held-out chart: look A 1.76 (vs 2.13 without matrix), look B 4.61 (vs 5.44).
 - Confirmed in Resolve (v2 exports, same day): the through-OpenDRT DCTLs render within
   0.16 ΔE00 of our prediction; colour patches vs the LUT (exposure matched) improved
-  from 2.13 → 1.79 (K1S1) and 5.44 → 4.59 (Ulook4b) against OpenDRT alone.
+  from 2.13 → 1.79 (look A) and 5.44 → 4.59 (look B) against OpenDRT alone.
 - Direction (pending user confirmation): add a "reference display transform" input —
   a LUT the user exports from Resolve (DWG/DI → display) for whatever CST/DRT follows the
-  DCTL — and fit through it. Ulook4b's split tone (warm highlights, cool shadows) and its
+  DCTL — and fit through it. Look B's split tone (warm highlights, cool shadows) and its
   yellow handling remain out of reach of any 3×3 matrix.
 
 ## D23 — Fit through a reference display transform (user decision 2026-10-16)
@@ -221,7 +220,7 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   OpenDRT v1.1.0 DCTL compiled as C++. (That Python tooling has since been replaced by
   the Rust fitter, D28, and removed with its fit results, D29.)
 - Held-out ColorChecker (user's Resolve exports), mean ΔE00 vs the LUT, no exposure
-  matching: K1S1 2.40 (Standard/ACES-2.0) → 0.65; Ulook4b 10.62 → 2.92. Far closer than a
+  matching: look A 2.40 (Standard/ACES-2.0) → 0.65; look B 10.62 → 2.92. Far closer than a
   3×3 matrix can get, because the tonescale and hue/purity behaviour are fitted too.
 - Delivered as a modified DCTL with look presets 9–13 and a per-preset grey scale
   (`lg_scale`, so Display Grey Luminance 10 = the fitted grey); original presets are
@@ -229,8 +228,8 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   PRESET (user decision): any stock tonescale preset gives every look the same exposure,
   set by Display Grey Luminance, exactly as for the stock looks.
 
-## D25 — 5207 pull 2 / 2393 preset from a linear-ACES LUT
-- `ACES2065_to_5207_pull2_K2393_D65_709G24.cube` (Resolve-generated, 65³, no shaper) takes
+## D25 — Preset from a linear-ACES LUT
+- A print-emulation LUT (Resolve-generated, 65³, no shaper) takes
   **linear ACES2065-1** in 0–1, i.e. only up to +2.5 stops over 18% gray (output there
   ≈ 58 nits); brighter footage is clipped by the LUT itself. Identified from the gray
   axis: linear gives 18% → 9.5 nits; any log reading gives 18–32 nits.
@@ -287,13 +286,13 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Safety checks: (1) finite, in-range output on a 17³ cube; (2) exposure sweep −8…+8
   stops of gray and 36 hues (display- and camera-limited chroma) — luminance must never
   fall as exposure rises (0.2 % tolerance); a reversal triggers an automatic refit with
-  brilliance frozen ("brl", also covers post brilliance), as was needed by hand for 5207;
+  brilliance frozen ("brl", also covers post brilliance), as was needed by hand for the linear-ACES LUT (D25);
   (3) smoothness: largest second difference over a 33³ DI cube, real colours ≤ +6 stops,
   unclipped channels, compared with the stock looks; > 1.5× is reported, not blocked.
   All stock looks pass (1) and (2) (tested).
-- Results vs the Python tool (training mean ΔE2000): K1S1 0.86 (0.94), Ulook4b 2.30
-  (2.44), 5207 2.37 with brilliance auto-frozen (2.38 frozen by hand), ARRI LogC4 709
-  1.06 (1.16), Goodrich 2.96 (3.00); ~4 s each instead of 20–120 s.
+- Results vs the Python tool (training mean ΔE2000): look A 0.86 (0.94), look B 2.30
+  (2.44), the D25 LUT 2.37 with brilliance auto-frozen (2.38 frozen by hand), ARRI LogC4
+  709 1.06 (1.16), look E 2.96 (3.00); ~4 s each instead of 20–120 s.
 
 ## D29 — Presets are local only (user decision 2026-10-17)
 - No LUT Match presets are baked into the app or committed to the repo: they are derived
@@ -365,8 +364,8 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   checks encoding 9 against the port.
 
 ## D33 — Neutralize Gray for OpenDRT matching (user request 2026-10-26)
-- Several of the user's LUTs (the 2393 print emulations, the LogC4 5201) render scene
-  neutrals off D65, and differently by level: e.g. 5219 pull 2 goes from red-orange in
+- Several of the user's LUTs (print emulations especially) render scene
+  neutrals off D65, and differently by level: e.g. one goes from red-orange in
   the shadows (Δu′v′ 0.009) to yellow-green at and above middle gray (0.012–0.014, b* up
   to +6). OpenDRT's gray is D65 at every level (creative white D65), so a match against
   the cast spends look parameters (creative white D60/D75, hue shifts) approximating a
@@ -390,9 +389,9 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   a gray-ramp-only mean.
 - Casts are reported (a note) when Δu′v′ > 0.005 at L* ≥ 10; darker levels are ignored
   because a cast there is not visible.
-- Results (training mean ΔE2000 / gray-ramp mean, off → every level): 5219 v2 2.08/1.36 →
-  1.90/0.32, 5207 2.37/1.04 → 2.25/0.52, 5201 v2 2.34/0.98 → 2.19/0.30, LogC4 5201
-  2.19/3.94 → 2.27/3.01 (its gray error is mostly tone, not colour). The 5219 every-level
+- Results (training mean ΔE2000 / gray-ramp mean, off → every level), four print
+  emulations: 2.08/1.36 → 1.90/0.32, 2.37/1.04 → 2.25/0.52, 2.34/0.98 → 2.19/0.30,
+  2.19/3.94 → 2.27/3.01 (its gray error is mostly tone, not colour). The first every-level
   fit exceeds the smoothness warning (0.35 vs 0.22 stock); at 50% it passes.
 
 ## D34 — White gain mode (user request 2026-10-26)
@@ -406,14 +405,14 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   (app: diffuse white / +3 / +5; CLI `--white-stops`). If the LUT's input range ends
   below it (linear-ACES LUTs end at +2.5), the brightest gray inside is used.
 - Unlike Middle gray / Every level (Bradford adaptations), the other levels keep the LUT's
-  cast *relative to* the white: on Ulook4b (yellow highlights, near-neutral mids) a white
+  cast *relative to* the white: on look B (yellow highlights, near-neutral mids) a white
   balanced at +3 stops leaves mid gray b* −5.5 and shadows b* −1…−3, i.e. cool shadows
   with neutral highlights. Balancing *before* the LUT (Offset in log, or linear gain in
-  camera RGB — the same for a log curve) was compared and rejected: Ulook4b's highlights
+  camera RGB — the same for a log curve) was compared and rejected: look B's highlights
   stay yellow whatever its input, and everything below the white goes strongly blue
   (mid gray b* −18) with oranges pushed toward red. Offset *after* the LUT lifts and
   tints the blacks.
-- Gain values equal an independent simulation (Ulook4b, +3 stops: R ×0.908, B ×1.344
+- Gain values equal an independent simulation (look B, +3 stops: R ×0.908, B ×1.344
   linear = R 0.961, B 1.131 on the 2.4 signal).
 
 ## D35 — White gain never takes the signal above 1 (user request 2026-10-26)
@@ -426,7 +425,7 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   without a table are sampled on a 17³ grid over 0–1.
 - "1" is the encoded signal's top (`decode_channel(1.0)`: 100 nits for the SDR outputs,
   10 000 for PQ). Reported as the factor and in stops; the app says when none was needed.
-- Ulook4b needs none: red reaches 1.0 but gets a gain below 1; blue peaks at 0.78 → 0.90.
+- Look B needs none: red reaches 1.0 but gets a gain below 1; blue peaks at 0.78 → 0.90.
 
 ## D36 — Negative × print batches (user request 2026-10-26)
 - The user's film LUTs come in two stages: *negative* LUTs (camera log → film negative,
@@ -439,20 +438,20 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - **Pair check** before fitting: 18% scene gray through the stack must land at 3–40% of
   the display peak (typical film pairs: ~10%), and at most 5% of realistic colours (gray
   −8…+8 stops; hues inside camera ∩ display gamut at −4…+6 stops) may leave the print's
-  input range. Colours beyond the display gamut are left out: the user's 5201 negative
+  input range. Colours beyond the display gamut are left out: one of the user's negatives
   sends ~14% of camera-gamut colours below 0, which the print clips, as Resolve does.
   Failing pairs are skipped unless `fit_mismatched`.
 - **Names** use film stocks only: `negative_print`. The negative: the camera stock number
   in its file name (Kodak 50xx/52xx/72xx/73xx, Fuji 85xx/86xx) plus pull/push
-  (`5201pull2`). The print: the user's `stock-names.json` (data folder) maps look codes
-  and profile variants to words (`DLook4-N_gn_V2` → `2383v1_D60_Neutralized_V2`). That
+  (`5213pull2`). The print: the user's `stock-names.json` (data folder) maps look codes
+  and profile variants to words (`<look>-N_gn_V2` → `<stock>_D60_Neutralized_V2`). That
   table describes the user's LUT pack, so like presets (D29) it is not in the repo.
   Unmatched files keep their file name. Two pairs with one name stop the batch.
 - `.dat` LUTs (headerless N³ float triples, blue fastest — the user's print LUTs) are read
   as `.3dl`.
-- First real run (5201 pull 2 negative × DLook prints, Rec.709 2.4): 18% gray lands at
-  11–15 nits for every print, confirming `AWG4LC4_to_5201_pull2` is a negative and the
-  DLooks take Cineon film log. About 6 s per pair; fitted ΔE2000 2.1–3.8.
+- First real run (one negative × the print LUTs, Rec.709 2.4): 18% gray lands at
+  11–15 nits for every print, confirming the negative LUT is a negative and the prints
+  take Cineon film log. About 6 s per pair; fitted ΔE2000 2.1–3.8.
 
 ## D37 — Measured stages, full LUTs, naming rules (user request 2026-10-27)
 - **Every LUT is measured** to find its stage; file names no longer decide it. If the
@@ -464,16 +463,16 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   outputs 0.13 or more. If the camera space is unknown (film log in), the slope of output
   code against input code along the neutral axis is used: below 1.4 a negative, above a
   **print**. On the user's LUTs: negatives 0.071–0.092 per stop; full LUTs 0.141–0.215;
-  prints slope 1.70–2.66 (softest: 2395 and LoCon 50, 1.70). The user can move any LUT to
+  prints slope 1.70–2.66 (softest 1.70). The user can move any LUT to
   another list; the app keeps showing what it measured as.
-- **Full LUTs** (camera log → display, e.g. `LogC34_DLook4…`, which is the FilmLog input
-  transform baked in front of a DLook print) are matched on their own after the pairs,
+- **Full LUTs** (camera log → display, e.g. `LogC34_<print>…`, which is the FilmLog input
+  transform baked in front of a print) are matched on their own after the pairs,
   never stacked with a negative. Their check is just where 18% gray lands.
 - **Names.** Negatives: a `negatives` prefix table, else stock number + pull/push, else
   `FilmLog` for any FilmLog transform (`LogC33`/`LogC34`/`34FilmLog` are all FilmLog to
   the user). Full LUTs: `[33X_]LogC33_`/`LogC34_` + print → `FilmLog_<print name>` (or the
   look code before `_To_`/`_Profile` when the table doesn't know it); a negative stock and
-  a print stock in the name → `5207pull2_2393`; else the table; else the file name.
+  a print stock in the name → `<negative stock>_<print stock>`; else the table; else the file name.
   A white move in a print's name (`D55toD58_Bradford`) appends `_D58`.
 - **Repeated names get letters**, not an error: every member of a repeated name gets a, b,
   c… in list order (z, then aa, ab…), within each list and again across all result names
@@ -493,8 +492,7 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   (edge patches are often missed, e.g. black on a black card); the placement whose
   colours a least-squares matrix fits best wins (mirrored placements only on request, with
   a 15 % handicap). Manual fallback: click dark skin, bluish green, black, white — the
-  order gives the orientation. On the user's three underwater stills: found 21–22 of 24
-  patches each, upside down, best by 2–5×.
+  order gives the orientation.
 - **Sampling:** a square 40 % of the pitch around each centre, every pixel (≤ 48²), trimmed
   to the 70 % nearest the median.
 - **Clipping** (user: "some images will have clipping"): a channel is clipped when > 2 % of
@@ -502,8 +500,8 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   (a plateau of ≥ 0.05 % of the image at the channel's largest value: sensor or export
   clip). Neutrals must darken from white to black in every channel; a step that doesn't is
   flagged as roll-off. Such patches are left out of the fit and shown. 16-bit integer
-  files clip negative values at 0; underwater, 14 of 24 patches lost their red channel
-  that way in one of the user's stills, so the app recommends half-float EXR.
+  files clip negative values at 0, which saturated colours often have, so the app
+  recommends half-float EXR.
 - **Encoding:** a chart can't reveal a gamut (a fitted matrix absorbs it), so gamut comes
   from the EXR header, else the file name, else the gamut paired with the curve, else
   (linear) CIE XYZ, always overridable. The curve is judged from the neutral row: in the
@@ -511,8 +509,7 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   clearly (a log still read as linear: slopes 0.2–0.4; linear read as log: 2–6), but log
   curves differ by less than real stills deviate from them, so a log still is assumed
   DaVinci Intermediate (the DCTL's space) unless named otherwise; the closest log curve is
-  reported. This also showed the user's first two example stills were labelled the wrong
-  way round (".1" is linear, ".2" log).
+  reported.
 - "CIE XYZ" is plain XYZ with D65 white (0.9505, 1, 1.089), as Resolve's CIE XYZ space.
 
 ## D39 — Chart correction model
@@ -532,12 +529,11 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   part of it) puts the target's neutrals at the target's level; *Keep* gives unity neutral
   gain. "Before" errors are always exposure matched.
 - **Restraint** (setting, default 0): ridge penalty pulling the matrix (in DWG units)
-  towards a plain white balance. Under water the exact fit needs R ≈ 7.8 R − 3.4 G in DWG
-  (red barely recorded), which amplifies noise and makes colours off the chart less
-  predictable. On the user's DWG/DI still: off 6.5 ΔE (row sum |m| 11.6), light (0.25)
-  7.2 (9.0), strong (0.6) 8.2–9.1 (≈4–6). Matrix + tone: 5.5 at off.
-- 3 × 3 limits: the user's stills reach 6.5 ΔE2000 mean (matrix) and 5.5 (tone) from ~19
-  before; the residual is spectral (underwater light), which a note explains above 6 ΔE.
+  towards a plain white balance. When a camera barely recorded a channel, the exact fit
+  needs very large gains on it, which amplify noise and make colours off the chart less
+  predictable; restraint trades a little chart accuracy for a gentler matrix.
+- 3 × 3 limits: spectral differences (unusual light, a sensor's own response) leave a
+  residual no matrix removes; a note explains it above 6 ΔE.
 
 ## D40 — OpenDRT preset from a chart
 - Target = stock OpenDRT (chosen look, tonescale, display encoding) of the target chart;
@@ -545,10 +541,9 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   way, ΔL*a*b* residuals on the display (neutrals 2×), regularised towards the start
   (6 per slider-range unit by default), bounded LM, the D28 safety checks with the
   automatic brilliance refit.
-- **After the matrix** (default on): OpenDRT alone can't make the large white balance and
-  red gain an underwater chart needs (16 → 12 ΔE, parameters at their bounds); after the
-  matrix it refines the residual (5.0 → 4.2) with all checks passing. Off fits OpenDRT
-  alone.
+- **After the matrix** (default on): OpenDRT's look parameters can't make a large white
+  balance or channel gain (they end at their bounds); after the matrix they refine the
+  residual. Off fits OpenDRT alone.
 - Fit tone (default on): tonescale contrast and offset are fitted too, so a camera's tone
   is matched. Frozen always: shoulder (tn_sh), toe (the chart's black is flare), high/low
   contrast modules, creative-white limit. Display Grey Luminance carries the exposure
