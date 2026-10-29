@@ -6,6 +6,35 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Chart matching** (DECISIONS D38–D40): find a ColorChecker Classic in a still (TIFF,
+  OpenEXR, PNG, JPEG or DPX, as exported from Resolve), in any orientation and with
+  perspective, sample its 24 patches, and fit a correction from the camera's chart to
+  the published values (2014 or earlier edition) or to another camera's chart. Exported
+  as a DWG/DI DCTL (3×3 matrix in XYZ, optionally with a per-channel tone curve) or fitted
+  as an OpenDRT look preset (after the matrix by default) saved to the preset library.
+  - The still's encoding is detected: linear vs log from how the neutral row follows the
+    light, the gamut from the EXR header or the file name, else the gamut that goes with
+    the curve; every part can be overridden.
+  - Patches with a clipped channel (at the file's bottom or top code, or at a flat
+    maximum) or out of order along the gray row are left out and reported; you can leave
+    out more by hand, or place the chart by clicking its corner patches.
+  - Exposure: matched to the target (default) or kept. Neutral locked by default.
+    Restraint pulls the matrix towards a plain white balance, for footage where the
+    camera barely recorded a channel (e.g. red under water).
+  - CLI: `lutmatrix chart <still> [--curve … --gamut …] [--model tone] [--target hero.tif]
+    [--dctl out.dctl] [--opendrt --save NAME]`.
+- App: **Chart** section (⌘3). Drop or open a still; the chart is shown with every sampled
+  patch numbered and marked (used, clipped, left out), zoomable with the scroll wheel;
+  click patches to leave them out, or *Place by hand…* by clicking four corner patches.
+  Swatches show camera · corrected · target for each patch with its error. Pop-ups for
+  orientation, curve, gamut and chart edition; *Another camera* picks a hero still as the
+  target. Export DCTL, Copy Matrix, and fit / save an OpenDRT preset. Dropping a still
+  anywhere opens it here; chart presets show in the library with their errors.
+
+### Changed
+- Minimum Rust version 1.88 (needed by the image decoders).
+
 ## [0.3.0] - 2026-10-27
 
 ### Added

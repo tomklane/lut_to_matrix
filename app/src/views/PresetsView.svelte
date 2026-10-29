@@ -95,7 +95,7 @@
 <div class="page">
   <div class="top">
     <p class="muted">
-      Your OpenDRT LUT Match presets. They are stored only on this computer and are not part of the app.
+      Your OpenDRT presets, fitted to LUTs (LUT Match) or to colour charts (Chart). They are stored only on this computer and are not part of the app.
       Build writes OpenDRT with the ticked presets added to its Look Preset menu, in this order,
       and a P3-D65 2.6 power option (“DCI - 2.6 Power / P3-D65”) added to its Display Encoding Preset menu.
     </p>

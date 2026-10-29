@@ -7,7 +7,7 @@ members = ["crates/lutmatrix-core", "crates/lutmatrix-opendrt", "crates/lutmatri
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 authors = ["tomklane"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/tomklane/lut_to_matrix"
@@ -21,6 +21,9 @@ serde_json = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
+# Chart stills (TIFF, OpenEXR, PNG, JPEG); exr directly for its header attributes.
+image = { version = "0.25", default-features = false, features = ["tiff", "exr", "png", "jpeg"] }
+exr = { version = "1.73", default-features = false }
 
 [profile.dev.package."*"]
 opt-level = 2

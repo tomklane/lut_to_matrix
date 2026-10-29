@@ -175,7 +175,7 @@ impl GrayAxis {
                 middle = (u, v, stops.abs());
             }
             // Keep luminance strictly rising (skips a clipped top and any reversal).
-            if curve.last().map_or(true, |c| xyz.y.ln() > c.0 + 1e-9) {
+            if curve.last().is_none_or(|c| xyz.y.ln() > c.0 + 1e-9) {
                 curve.push((xyz.y.ln(), u, v));
             }
         }

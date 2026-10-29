@@ -42,6 +42,8 @@
     <path d="M10 3 17 6.5 10 10 3 6.5Z" /><path d="m3 10 7 3.5 7-3.5" /><path d="m3 13.5 7 3.5 7-3.5" />
   {:else if name === "stop"}
     <rect x="5" y="5" width="10" height="10" rx="1.5" />
+  {:else if name === "chart"}
+    <rect x="2.5" y="4.5" width="15" height="11" rx="1.5" /><path d="M6.5 4.5v11M10 4.5v11M13.5 4.5v11M2.5 10h15" />
   {:else if name === "swap"}
     <path d="M4 7h11l-3-3M16 13H5l3 3" />
   {/if}

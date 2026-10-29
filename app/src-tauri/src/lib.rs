@@ -3,6 +3,8 @@
 //! The web front end (app/src) does layout and state; everything colour-related runs here.
 //! Long jobs (analysis, OpenDRT fitting) run on a blocking thread so the window stays live.
 
+mod chart;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -350,9 +352,18 @@ fn presets_list() -> CmdResult<PresetList> {
             .into_iter()
             .map(|p| PresetRow {
                 created: p.created_date(),
-                error: p.report.as_ref().map(|r| (r.metric.label().to_string(), r.fitted.mean)),
-                stock_error: p.report.as_ref().map(|r| r.stock.mean),
-                notes: p.report.as_ref().map(|r| r.notes.clone()).unwrap_or_default(),
+                error: p
+                    .report
+                    .as_ref()
+                    .map(|r| (r.metric.label().to_string(), r.fitted.mean))
+                    .or_else(|| p.chart.as_ref().map(|c| ("ΔE2000".to_string(), c.after.mean))),
+                stock_error: p.report.as_ref().map(|r| r.stock.mean).or_else(|| p.chart.as_ref().map(|c| c.before.mean)),
+                notes: p
+                    .report
+                    .as_ref()
+                    .map(|r| r.notes.clone())
+                    .or_else(|| p.chart.as_ref().map(|c| c.notes.clone()))
+                    .unwrap_or_default(),
                 name: p.name,
                 source_lut: p.source_lut,
                 grey_nits: p.grey_nits,
@@ -872,6 +883,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(state)
+        .manage(chart::ChartState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             catalog,
@@ -906,6 +918,16 @@ pub fn run() {
             batch_save,
             batch_existing,
             batch_export_csv,
+            chart::chart_catalog,
+            chart::chart_load,
+            chart::chart_analyze,
+            chart::chart_preview,
+            chart::chart_default_dctl_name,
+            chart::chart_export_dctl,
+            chart::chart_matrix_text,
+            chart::chart_opendrt_fit,
+            chart::chart_default_preset_name,
+            chart::chart_preset_save,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LUT Matrix");

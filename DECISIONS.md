@@ -478,3 +478,81 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - **Repeated names get letters**, not an error: every member of a repeated name gets a, b,
   c… in list order (z, then aa, ab…), within each list and again across all result names
   of a run. Hand-typed names are kept as typed (the run-level pass still letters them).
+
+## D38 — Chart matching: detection, sampling, encoding (user request 2026-10-29)
+- **Goal:** correct a camera's ColorChecker Classic in a still so footage from different
+  cameras matches: to the published chart or to another camera's chart, delivered as a
+  DWG/DI DCTL or an OpenDRT preset.
+- **Reading stills:** values as stored, no colour management (integer files normalised to
+  0–1 by their largest code, D4). TIFF/OpenEXR/PNG/JPEG via the `image` crate, DPX (Resolve's
+  default still format) by our own reader. EXR chromaticities are read with `exr`.
+- **Detection** (no OpenCV, so it ports everywhere): max-of-RGB detection image, adaptive
+  threshold at 1/2/4/8 % of the image size, square-ish well-filled blobs, a lattice from
+  nearest and perpendicular neighbours, the largest connected blob of grid cells, a
+  homography refined twice. The 6 × 4 footprint is tried in each orientation and offset
+  (edge patches are often missed, e.g. black on a black card); the placement whose
+  colours a least-squares matrix fits best wins (mirrored placements only on request, with
+  a 15 % handicap). Manual fallback: click dark skin, bluish green, black, white — the
+  order gives the orientation. On the user's three underwater stills: found 21–22 of 24
+  patches each, upside down, best by 2–5×.
+- **Sampling:** a square 40 % of the pitch around each centre, every pixel (≤ 48²), trimmed
+  to the 70 % nearest the median.
+- **Clipping** (user: "some images will have clipping"): a channel is clipped when > 2 % of
+  its pixels sit at the file's bottom or top code (integers) or at a flat image maximum
+  (a plateau of ≥ 0.05 % of the image at the channel's largest value: sensor or export
+  clip). Neutrals must darken from white to black in every channel; a step that doesn't is
+  flagged as roll-off. Such patches are left out of the fit and shown. 16-bit integer
+  files clip negative values at 0; underwater, 14 of 24 patches lost their red channel
+  that way in one of the user's stills, so the app recommends half-float EXR.
+- **Encoding:** a chart can't reveal a gamut (a fitted matrix absorbs it), so gamut comes
+  from the EXR header, else the file name, else the gamut paired with the curve, else
+  (linear) CIE XYZ, always overridable. The curve is judged from the neutral row: in the
+  right decoding, log2(decoded) vs log2(reflectance) has slope 1. Linear vs log separates
+  clearly (a log still read as linear: slopes 0.2–0.4; linear read as log: 2–6), but log
+  curves differ by less than real stills deviate from them, so a log still is assumed
+  DaVinci Intermediate (the DCTL's space) unless named otherwise; the closest log curve is
+  reported. This also showed the user's first two example stills were labelled the wrong
+  way round (".1" is linear, ".2" log).
+- "CIE XYZ" is plain XYZ with D65 white (0.9505, 1, 1.089), as Resolve's CIE XYZ space.
+
+## D39 — Chart correction model
+- Measured patches → XYZ (D65) with the still's encoding; target = published L*a*b* (D50)
+  → XYZ, Bradford to D65, Y = 1 for a perfect white (or another still's measured XYZ).
+- **Matrix** (default): 3 × 3 in XYZ, same DCTL form as D21. Seeded by least squares
+  weighted 1/Y (so dark patches count), refined by LM on ΔL*a*b* (neutrals weighted 2×),
+  reported in ΔE2000. **Lock neutral** (default on): exact constraint that the sum of the
+  mid neutrals (neutral 8 … 3.5; white often clips, black carries flare) maps onto the
+  target's.
+- **Matrix + tone:** a per-channel curve in linear DWG before the matrix,
+  y = 0.18·((x − b)/0.18)^p (p 0.5–2, b a fraction of the channel's gray level), tangent
+  line below 8 stops under 18 % so it is monotonic and finite for negatives. For stills
+  whose neutral row is not proportional to light (baked-in tone, flare). Fitted jointly,
+  then the matrix re-solved with the exact neutral constraint.
+- **Exposure:** *Match* (default; the user wants cameras to match, so the chart's level is
+  part of it) puts the target's neutrals at the target's level; *Keep* gives unity neutral
+  gain. "Before" errors are always exposure matched.
+- **Restraint** (setting, default 0): ridge penalty pulling the matrix (in DWG units)
+  towards a plain white balance. Under water the exact fit needs R ≈ 7.8 R − 3.4 G in DWG
+  (red barely recorded), which amplifies noise and makes colours off the chart less
+  predictable. On the user's DWG/DI still: off 6.5 ΔE (row sum |m| 11.6), light (0.25)
+  7.2 (9.0), strong (0.6) 8.2–9.1 (≈4–6). Matrix + tone: 5.5 at off.
+- 3 × 3 limits: the user's stills reach 6.5 ΔE2000 mean (matrix) and 5.5 (tone) from ~19
+  before; the residual is spectral (underwater light), which a note explains above 6 ΔE.
+
+## D40 — OpenDRT preset from a chart
+- Target = stock OpenDRT (chosen look, tonescale, display encoding) of the target chart;
+  the preset's look parameters are fitted so OpenDRT shows the camera's chart the same
+  way, ΔL*a*b* residuals on the display (neutrals 2×), regularised towards the start
+  (6 per slider-range unit by default), bounded LM, the D28 safety checks with the
+  automatic brilliance refit.
+- **After the matrix** (default on): OpenDRT alone can't make the large white balance and
+  red gain an underwater chart needs (16 → 12 ΔE, parameters at their bounds); after the
+  matrix it refines the residual (5.0 → 4.2) with all checks passing. Off fits OpenDRT
+  alone.
+- Fit tone (default on): tonescale contrast and offset are fitted too, so a camera's tone
+  is matched. Frozen always: shoulder (tn_sh), toe (the chart's black is flare), high/low
+  contrast modules, creative-white limit. Display Grey Luminance carries the exposure
+  when it is matched (golden-section start on the neutrals).
+- Saved presets record the chart fit (source still, base look, target, scores) and appear
+  in the library and OpenDRT builds like LUT Match presets. Use them with the same
+  Display Encoding Preset they were fitted for.

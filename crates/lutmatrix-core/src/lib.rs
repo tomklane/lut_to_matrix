@@ -6,6 +6,7 @@
 
 pub mod analysis;
 pub mod batch;
+pub mod chart;
 pub mod dctl;
 pub mod detect;
 pub mod difference;

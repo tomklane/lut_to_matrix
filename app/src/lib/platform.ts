@@ -7,6 +7,13 @@ export interface FileFilter {
   extensions: string[];
 }
 
+export const IMAGE_FILTER: FileFilter = {
+  name: "Still",
+  extensions: ["tif", "tiff", "exr", "png", "jpg", "jpeg", "dpx", "TIF", "TIFF", "EXR", "PNG", "JPG", "JPEG", "DPX"],
+};
+export const IMAGE_RE = /\.(tiff?|exr|png|jpe?g|dpx)$/i;
+export const DCTL_FILTER: FileFilter = { name: "DCTL", extensions: ["dctl"] };
+
 export const LUT_FILTER: FileFilter = { name: "LUT", extensions: ["cube", "3dl", "dat", "CUBE", "3DL", "DAT"] };
 
 export async function openFile(filters: FileFilter[], defaultPath?: string): Promise<string | null> {

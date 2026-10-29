@@ -40,7 +40,7 @@ impl Transform for Stack {
     /// The first stage's input range; later stages take whatever it produces (clamped
     /// to their range, as Resolve does).
     fn in_domain_rgb(&self, rgb: &Vec3) -> bool {
-        self.stages.first().map_or(true, |l| l.in_domain(rgb))
+        self.stages.first().is_none_or(|l| l.in_domain(rgb))
     }
     /// The last stage's largest entries bound the output.
     fn output_max(&self) -> Option<[f64; 3]> {
@@ -72,7 +72,7 @@ fn prefix_match<'a>(table: &'a BTreeMap<String, String>, stem: &str) -> Option<(
         let k = k.to_ascii_lowercase();
         let rest = lower.strip_prefix(k.as_str());
         // A whole code: followed by a separator, the end, or "Profile" ("Dlook4bProfile_To_…").
-        rest.is_some_and(|r| r.chars().next().map_or(true, |c| !c.is_ascii_alphanumeric()) || r.starts_with("profile"))
+        rest.is_some_and(|r| r.chars().next().is_none_or(|c| !c.is_ascii_alphanumeric()) || r.starts_with("profile"))
     })
 }
 

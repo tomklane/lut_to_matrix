@@ -59,6 +59,7 @@ export async function mockInvoke(cmd: string, args: Record<string, any> = {}): P
     case "save_prefs":
       return null;
     case "initial_file":
+      if (params.has("still")) return "/Users/you/Stills/Still 2026-10-29 110516_1.29.1.T.tif";
       return params.has("lut") ? "/Users/you/LUTs/AlexaV3_K1S1_LogC2Video_Rec709_EE_davinci3d.cube" : null;
     case "load_lut": {
       const d = (await fx("inspect.json"))[0];
@@ -130,6 +131,50 @@ export async function mockInvoke(cmd: string, args: Record<string, any> = {}): P
       b.results = all;
       return batchView();
     }
+    case "chart_catalog":
+      return {
+        curves: [
+          { curve: { curve: "da_vinci_intermediate" }, name: "DaVinci Intermediate" },
+          { curve: { curve: "linear" }, name: "Linear" },
+          { curve: { curve: "aces_cct" }, name: "ACEScct" },
+          { curve: { curve: "arri_log_c3", ei: 800 }, name: "ARRI LogC3 (EI 800)" },
+          { curve: { curve: "arri_log_c4" }, name: "ARRI LogC4" },
+        ],
+        gamuts: [["da_vinci_wide_gamut", "DaVinci Wide Gamut"], ["xyz", "CIE XYZ"], ["aces_ap0", "ACES AP0 (ACES2065-1)"], ["aces_ap1", "ACES AP1 (ACEScg / ACEScct)"]],
+        orientations: [["rot0", "Upright"], ["rot90", "Rotated 90° clockwise"], ["rot180", "Upside down"], ["rot270", "Rotated 90° counter-clockwise"]],
+        editions: [["after2014", "ColorChecker Classic (Nov 2014 and later)"], ["before2014", "ColorChecker Classic (before Nov 2014)"]],
+        patch_names: [],
+        looks: ["Standard", "Arriba", "Sylvan", "Colorful", "Aery", "Dystopic", "Umbra", "Base", "Standard 2"],
+        tonescales: ["USE LOOK PRESET", "Low Contrast", "ACES-2.0"],
+        displays: [[0, "Rec.1886 - 2.4 Power / Rec.709"], [1, "sRGB Display - 2.2 Power / Rec.709"]],
+        extensions: ["tif", "exr", "dpx"],
+      };
+    case "chart_load": {
+      // Fixture: `lutmatrix chart <still> --json > app/dev-fixtures/chart.json`
+      const c = (await fx("chart.json")).chart;
+      return { path: args.path, file_name: c.file_name, info: c.image, found: c.detected_patches };
+    }
+    case "chart_analyze":
+      await sleep(200);
+      return (await fx("chart.json")).chart;
+    case "chart_preview": {
+      // Fixture: `lutmatrix chart <still> --preview app/dev-fixtures/chart_preview.jpg`
+      const c = (await fx("chart.json")).chart;
+      return { data_url: "/dev-fixtures/chart_preview.jpg", width: 1600, height: 1600, scale: c.image.width / 1600 };
+    }
+    case "chart_opendrt_fit":
+      await sleep(800);
+      return (await fx("chart.json")).opendrt;
+    case "chart_default_dctl_name":
+      return "Still_Chart.dctl";
+    case "chart_default_preset_name":
+      return "Chart Still";
+    case "chart_export_dctl":
+      return args.dctlPath;
+    case "chart_matrix_text":
+      return "1 0 0\n0 1 0\n0 0 1";
+    case "chart_preset_save":
+      return args.name;
     case "batch_existing":
       return [];
     case "batch_save":
