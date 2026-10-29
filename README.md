@@ -47,6 +47,18 @@ puts the 3×3 on the clipboard. *OpenDRT Match* fits OpenDRT to the LUT and save
 result to your local preset library; *Presets* builds an OpenDRT DCTL from it. Settings
 are remembered between sessions. Light and dark mode follow the system.
 
+*Chart* matches cameras with a colour chart. Drop a still with a ColorChecker Classic
+(TIFF, OpenEXR, DPX, PNG or JPEG exported from Resolve): the chart is found in any
+orientation, its patches are sampled, and the still's curve and gamut are detected
+(change them with the pop-ups if the still was exported in something else). Patches
+with a clipped channel are left out and marked; click a patch to leave it out too, or
+*Place by hand…* if the chart isn't found. The correction to the published chart, or to
+another camera's chart (*Another camera*), updates as you change anything: *Export
+DCTL…* writes it as a DWG/DI DCTL, and *Fit Preset* fits an OpenDRT look preset (after
+the matrix by default) that you can save to the library. Export stills as half-float
+EXR when you can: 16-bit integer files can't hold the negative values that saturated or
+underwater colours often have.
+
 
 ## Build
 
@@ -147,6 +159,17 @@ lutmatrix opendrt fit --neutral-gray white-gain --white-stops 3 "look.cube"   # 
 lutmatrix opendrt presets list                               # also: show, remove, import, export, path
 lutmatrix opendrt build -o OpenDRT_LUTmatch.dctl            # OpenDRT + every preset in your library
 lutmatrix opendrt build --preset "LUT Match K1S1" -o K1S1.dctl
+```
+
+### Match a camera to a chart
+
+```sh
+lutmatrix chart still.tif                                   # find the chart, detect the encoding, report the fit
+lutmatrix chart still.tif --dctl Camera_Chart.dctl          # write the correction (DWG/DI in and out)
+lutmatrix chart still.exr --curve linear --gamut xyz        # say what the still was exported in
+lutmatrix chart still.tif --model tone --restraint 0.25     # add a per-channel tone curve; gentler matrix
+lutmatrix chart b_cam.tif --target a_cam.tif --dctl b_to_a.dctl   # match camera B to camera A's chart
+lutmatrix chart still.tif --opendrt --save "Chart Cam B"    # also fit an OpenDRT preset (after the matrix)
 ```
 
 ### Batch: every negative × every print, plus full LUTs

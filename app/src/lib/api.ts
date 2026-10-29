@@ -398,6 +398,185 @@ export async function onBatchPair(f: (p: BatchProgress) => void): Promise<() => 
 
 /* ---------- commands ---------- */
 
+
+/* ---------- chart matching ---------- */
+
+export type LogCurveJson = { curve: string; ei?: number };
+export type StillGamut = string;
+export interface StillSpace {
+  curve: LogCurveJson;
+  gamut: StillGamut;
+}
+export type Orientation = "rot0" | "rot90" | "rot180" | "rot270" | "mirror0" | "mirror90" | "mirror180" | "mirror270";
+export type ChartEdition = "after2014" | "before2014";
+export interface ChartCatalog {
+  curves: { curve: LogCurveJson; name: string }[];
+  gamuts: [StillGamut, string][];
+  orientations: [Orientation, string][];
+  editions: [ChartEdition, string][];
+  patch_names: string[];
+  looks: string[];
+  tonescales: string[];
+  displays: [number, string][];
+  extensions: string[];
+}
+export interface ImageInfo {
+  format: string;
+  sample_type: string;
+  float: boolean;
+  max_code: number;
+  width: number;
+  height: number;
+}
+export interface LoadedStill {
+  path: string;
+  file_name: string;
+  info: ImageInfo;
+  found: number;
+}
+export interface ChartFitSettings {
+  model: "matrix" | "matrix_tone";
+  exposure: "match" | "keep";
+  lock_neutral: boolean;
+  neutral_weight: number;
+  restraint: number;
+}
+export interface ChartSettings {
+  edition: ChartEdition;
+  space: StillSpace | null;
+  orientation: Orientation | null;
+  corners: [[number, number], [number, number], [number, number], [number, number]] | null;
+  sample_size: number;
+  exclude: number[];
+  clip_fraction: number;
+  mirrors: boolean;
+  fit: ChartFitSettings;
+}
+export const defaultChartFit: ChartFitSettings = { model: "matrix", exposure: "match", lock_neutral: true, neutral_weight: 2, restraint: 0 };
+export interface PatchSample {
+  mean: [number, number, number];
+  std: [number, number, number];
+  low_clip: [number, number, number];
+  high_clip: [number, number, number];
+  n: number;
+}
+export interface PatchReport {
+  index: number;
+  name: string;
+  centre: [number, number];
+  sample_box: [number, number][];
+  sample: PatchSample;
+  clipped_low: boolean[];
+  clipped_high: boolean[];
+  rolled_off: boolean[];
+  excluded: boolean;
+  used: boolean;
+  reason: string | null;
+  xyz: [number, number, number];
+  target: [number, number, number];
+  corrected: [number, number, number];
+  de_before: number;
+  de_after: number;
+  swatch_measured: [number, number, number];
+  swatch_target: [number, number, number];
+  swatch_corrected: [number, number, number];
+}
+export interface CurveFit {
+  curve: LogCurveJson;
+  slopes: [number, number, number];
+  rms_stops: number;
+  score: number;
+}
+export interface ChartFit {
+  settings: ChartFitSettings;
+  m_xyz: Mat3;
+  m_dwg: Mat3;
+  tone: { power: [number, number, number]; black: [number, number, number] } | null;
+  exposure_ratio: number;
+  neutral_gain: number;
+  de_before: number[];
+  de_after: number[];
+  mean_before: number;
+  mean_after: number;
+  max_after: number;
+  neutral_after: number;
+  used: number;
+  notes: string[];
+}
+export interface ChartAnalysis {
+  file_name: string;
+  image: ImageInfo;
+  placement: { h: Mat3; orientation: Orientation };
+  placement_source: "detected" | "manual";
+  detected_patches: number;
+  pitch_px: number;
+  alternatives: { orientation: Orientation; score: number }[];
+  space: StillSpace;
+  space_detected: boolean;
+  guess: {
+    space: StillSpace;
+    curve_confidence: Confidence;
+    gamut_confidence: Confidence;
+    reasons: string[];
+    curves: CurveFit[];
+  };
+  edition: ChartEdition;
+  target_name: string;
+  patches: PatchReport[];
+  fit: ChartFit | null;
+  fit_error: string | null;
+  notes: string[];
+}
+export interface ChartPreview {
+  data_url: string;
+  width: number;
+  height: number;
+  scale: number;
+}
+export interface OdrtChartSettings {
+  look: number;
+  tonescale: number;
+  display_encoding: number;
+  fit_tone: boolean;
+  after_matrix: boolean;
+  regularization: number;
+  max_iterations: number;
+  threads: number;
+}
+export const defaultOdrtChart: OdrtChartSettings = {
+  look: 0,
+  tonescale: 0,
+  display_encoding: 0,
+  fit_tone: true,
+  after_matrix: true,
+  regularization: 6,
+  max_iterations: 80,
+  threads: 0,
+};
+export interface OdrtScore {
+  mean: number;
+  max: number;
+  neutral: number;
+  per_patch: number[];
+}
+export interface OdrtChartFit {
+  source: string;
+  target: string;
+  base: string;
+  settings: OdrtChartSettings;
+  config: { grey_nits: number };
+  before: OdrtScore;
+  after: OdrtScore;
+  used: boolean[];
+  swatch_target: [number, number, number][];
+  swatch_before: [number, number, number][];
+  swatch_after: [number, number, number][];
+  frozen: string[];
+  safety: { finite_in_range: boolean; reversals: { colour: string; at_stops: number; drop_percent: number }[]; roughness: number; stock_roughness: number };
+  notes: string[];
+  seconds: number;
+}
+
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   catalog: () => invoke<Catalog>("catalog"),
@@ -441,4 +620,16 @@ export const api = {
   batchSave: (names: string[], replace: boolean) => invoke<string[]>("batch_save", { names, replace }),
   batchExisting: (names: string[]) => invoke<string[]>("batch_existing", { names }),
   batchExportCsv: (path: string) => invoke<void>("batch_export_csv", { path }),
+  chartCatalog: () => invoke<ChartCatalog>("chart_catalog"),
+  chartLoad: (path: string) => invoke<LoadedStill>("chart_load", { path }),
+  chartAnalyze: (req: { path: string; settings: ChartSettings; target: { path: string; space: StillSpace | null } | null }) =>
+    invoke<ChartAnalysis>("chart_analyze", { req }),
+  chartPreview: (path: string, space: StillSpace, exposureRatio: number) =>
+    invoke<ChartPreview>("chart_preview", { path, space, exposureRatio }),
+  chartDefaultDctlName: (path: string) => invoke<string>("chart_default_dctl_name", { path }),
+  chartExportDctl: (dctlPath: string) => invoke<string>("chart_export_dctl", { dctlPath }),
+  chartMatrixText: () => invoke<string>("chart_matrix_text"),
+  chartOpendrtFit: (settings: OdrtChartSettings) => invoke<OdrtChartFit>("chart_opendrt_fit", { settings }),
+  chartDefaultPresetName: (path: string) => invoke<string>("chart_default_preset_name", { path }),
+  chartPresetSave: (name: string, replace: boolean) => invoke<string>("chart_preset_save", { name, replace }),
 };

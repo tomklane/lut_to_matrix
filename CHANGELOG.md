@@ -24,6 +24,13 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     camera barely recorded a channel (e.g. red under water).
   - CLI: `lutmatrix chart <still> [--curve … --gamut …] [--model tone] [--target hero.tif]
     [--dctl out.dctl] [--opendrt --save NAME]`.
+- App: **Chart** section (⌘3). Drop or open a still; the chart is shown with every sampled
+  patch numbered and marked (used, clipped, left out), zoomable with the scroll wheel;
+  click patches to leave them out, or *Place by hand…* by clicking four corner patches.
+  Swatches show camera · corrected · target for each patch with its error. Pop-ups for
+  orientation, curve, gamut and chart edition; *Another camera* picks a hero still as the
+  target. Export DCTL, Copy Matrix, and fit / save an OpenDRT preset. Dropping a still
+  anywhere opens it here; chart presets show in the library with their errors.
 
 ### Changed
 - Minimum Rust version 1.88 (needed by the image decoders).

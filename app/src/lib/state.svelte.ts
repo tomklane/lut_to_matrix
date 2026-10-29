@@ -10,6 +10,16 @@ import {
   type AppInfo,
   type BatchView,
   type Catalog,
+  type ChartAnalysis,
+  type ChartCatalog,
+  type ChartFitSettings,
+  type ChartPreview,
+  type ChartSettings,
+  type LoadedStill,
+  type OdrtChartFit,
+  type OdrtChartSettings,
+  defaultChartFit,
+  defaultOdrtChart,
   type InputSpace,
   type LoadedLut,
   type MatchSettings,
@@ -20,7 +30,7 @@ import {
 } from "./api";
 import { dirName } from "./platform";
 
-export type View = "matrix" | "opendrt" | "batch" | "presets";
+export type View = "matrix" | "opendrt" | "chart" | "batch" | "presets";
 
 export interface Through {
   path: string;
@@ -60,6 +70,53 @@ class AppState {
   /** The run in progress: pairs done / total, when it started, the latest pair. */
   batchProgress = $state<{ done: number; total: number; started: number; last: string } | null>(null);
   batchFitMismatched = $state(false);
+
+  /* Chart matching. */
+  chartCatalog = $state<ChartCatalog | null>(null);
+  still = $state<LoadedStill | null>(null);
+  loadingStill = $state(false);
+  /** Per-still choices (not remembered): encoding override, orientation, corners, excluded patches. */
+  chart = $state<ChartSettings>(freshChartSettings(structuredClone(defaultChartFit)));
+  /** The target: null = the published chart, else another still. */
+  chartTarget = $state<LoadedStill | null>(null);
+  chartAnalysis = $state<ChartAnalysis | null>(null);
+  chartAnalyzing = $state(false);
+  chartError = $state<string | null>(null);
+  chartPreview = $state<ChartPreview | null>(null);
+  odrtChart = $state<OdrtChartSettings>(structuredClone(defaultOdrtChart));
+  odrtChartFit = $state<OdrtChartFit | null>(null);
+  odrtChartRunning = $state(false);
+  odrtChartError = $state<string | null>(null);
+
+  async openStill(path: string) {
+    this.loadingStill = true;
+    try {
+      const s = await api.chartLoad(path);
+      this.still = s;
+      // Fresh per-still choices, same fit settings.
+      this.chart = freshChartSettings($state.snapshot(this.chart.fit), this.chart.edition);
+      this.chartAnalysis = null;
+      this.chartError = null;
+      this.chartPreview = null;
+      this.odrtChartFit = null;
+      this.odrtChartError = null;
+      this.lastDir = dirName(path);
+      this.view = "chart";
+      if (!s.found) this.notify("No chart found automatically: click its four corner patches to place it", "error");
+    } catch (e) {
+      this.notify(String(e), "error");
+    } finally {
+      this.loadingStill = false;
+    }
+  }
+
+  async openTargetStill(path: string) {
+    try {
+      this.chartTarget = await api.chartLoad(path);
+    } catch (e) {
+      this.notify(String(e), "error");
+    }
+  }
 
   toast = $state<{ text: string; kind: "ok" | "error" } | null>(null);
   showAbout = $state(false);
@@ -137,6 +194,9 @@ class AppState {
       view: this.view,
       settings: $state.snapshot(this.settings),
       match: $state.snapshot(this.match),
+      chartFit: $state.snapshot(this.chart.fit),
+      chartEdition: this.chart.edition,
+      odrtChart: $state.snapshot(this.odrtChart),
       through: this.through ? $state.snapshot(this.through) : null,
       lastDir: this.lastDir,
     };
@@ -145,7 +205,12 @@ class AppState {
   applyPrefs(p: unknown) {
     if (!p || typeof p !== "object") return;
     const prefs = p as Record<string, unknown>;
-    if (["matrix", "opendrt", "batch", "presets"].includes(prefs.view as string)) this.view = prefs.view as View;
+    if (["matrix", "opendrt", "chart", "batch", "presets"].includes(prefs.view as string)) this.view = prefs.view as View;
+    if (prefs.chartFit && typeof prefs.chartFit === "object")
+      this.chart.fit = { ...structuredClone(defaultChartFit), ...(prefs.chartFit as Partial<ChartFitSettings>) };
+    if (prefs.chartEdition === "after2014" || prefs.chartEdition === "before2014") this.chart.edition = prefs.chartEdition;
+    if (prefs.odrtChart && typeof prefs.odrtChart === "object")
+      this.odrtChart = { ...structuredClone(defaultOdrtChart), ...(prefs.odrtChart as Partial<OdrtChartSettings>) };
     if (prefs.settings && typeof prefs.settings === "object")
       this.settings = { ...structuredClone(defaultSettings), ...(prefs.settings as Partial<Settings>) };
     if (prefs.match && typeof prefs.match === "object")
@@ -155,7 +220,15 @@ class AppState {
   }
 }
 
+function freshChartSettings(fit: ChartFitSettings, edition: ChartSettings["edition"] = "after2014"): ChartSettings {
+  return { edition, space: null, orientation: null, corners: null, sample_size: 0.4, exclude: [], clip_fraction: 0.02, mirrors: false, fit };
+}
+
 export const app = new AppState();
+
+export function curveKey(c: { curve: string; ei?: number }): string {
+  return c.curve + (c.ei ? `:${c.ei}` : "");
+}
 
 /* ---------- display helpers ---------- */
 
