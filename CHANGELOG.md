@@ -6,7 +6,14 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
 ### Added
+- **In-app updates** (DECISIONS D41): the app looks for a newer published release a few
+  seconds after launch and offers *Install and Relaunch*; the download is checked against
+  the app's signing key before it installs. *About → Check for Updates* checks by hand;
+  the launch check can be turned off there. Releases carry the signed update files and a
+  `latest.json` manifest when the signing key is set up (README, Releasing).
 - **Chart matching** (DECISIONS D38–D40): find a ColorChecker Classic in a still (TIFF,
   OpenEXR, PNG, JPEG or DPX, as exported from Resolve), in any orientation and with
   perspective, sample its 24 patches, and fit a correction from the camera's chart to
@@ -192,7 +199,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tomklane/lut_to_matrix/releases/tag/v0.1.0

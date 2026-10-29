@@ -33,9 +33,12 @@ so each system asks once before the first launch:
   anyway*. WebView2, which the app needs, is part of Windows 10 and 11; the installer
   downloads it if it's missing.
 
-After that the app opens normally. Updates: install the new version over the old one;
-your settings and preset library are kept (they live in your user data folder, not in
-the app). To uninstall: drag the app to the Trash on macOS; *Settings → Apps* on Windows.
+After that the app opens normally. **Updates:** from version 0.4.0 the app updates
+itself: a few seconds after launch it looks for a newer release and offers *Install and
+Relaunch* (or use *About LUT Matrix → Check for Updates*). Updates are signed, and the
+app checks the signature before installing. Older versions: install the new version over
+the old one once. Your settings and preset library are kept either way (they live in
+your user data folder, not in the app). To uninstall: drag the app to the Trash on macOS; *Settings → Apps* on Windows.
 
 ## The app
 
@@ -101,7 +104,19 @@ The version lives only in the root `Cargo.toml` (`[workspace.package] version`).
    everything with `SHA256SUMS.txt` to a **draft** release, with notes taken from the
    changelog.
 3. Download and try the files from the draft (*Releases* page). Then *Edit → Publish
-   release*, which creates the `v<version>` tag. Nothing is public before that.
+   release*, which creates the `v<version>` tag. Nothing is public before that, and
+   installed apps are only offered the newest **published, non-pre-release** release.
+
+**In-app updates** need the update signing key as two repository secrets (*Settings →
+Secrets and variables → Actions → New repository secret*): `TAURI_SIGNING_PRIVATE_KEY`
+(the whole contents of the private key file) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+The matching public key is in `app/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`).
+With the secrets set, the workflow also attaches the signed update files (the macOS
+`.app.tar.gz`, the Windows installers' `.sig`) and `latest.json`; without them it warns
+and builds as before, and installed apps won't see that release as an update. Keep the
+private key safe: losing it means existing installs can't update until reinstalled by
+hand, and anyone holding it could sign updates. A new key pair: `npx tauri signer
+generate -w lutmatrix-updater.key` in `app/` (then put the new public key in the config).
 
 Without the tick, the workflow only builds and checks, leaving the files as workflow
 artifacts: use that for test builds. A version with a pre-release part (`0.2.0-beta.1`) is

@@ -29,6 +29,7 @@ import {
   type Settings,
 } from "./api";
 import { dirName } from "./platform";
+import { updates } from "./updates.svelte";
 
 export type View = "matrix" | "opendrt" | "chart" | "batch" | "presets";
 
@@ -197,6 +198,7 @@ class AppState {
       chartFit: $state.snapshot(this.chart.fit),
       chartEdition: this.chart.edition,
       odrtChart: $state.snapshot(this.odrtChart),
+      autoUpdate: updates.auto,
       through: this.through ? $state.snapshot(this.through) : null,
       lastDir: this.lastDir,
     };
@@ -206,6 +208,7 @@ class AppState {
     if (!p || typeof p !== "object") return;
     const prefs = p as Record<string, unknown>;
     if (["matrix", "opendrt", "chart", "batch", "presets"].includes(prefs.view as string)) this.view = prefs.view as View;
+    if (typeof prefs.autoUpdate === "boolean") updates.auto = prefs.autoUpdate;
     if (prefs.chartFit && typeof prefs.chartFit === "object")
       this.chart.fit = { ...structuredClone(defaultChartFit), ...(prefs.chartFit as Partial<ChartFitSettings>) };
     if (prefs.chartEdition === "after2014" || prefs.chartEdition === "before2014") this.chart.edition = prefs.chartEdition;

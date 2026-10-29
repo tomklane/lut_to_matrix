@@ -113,6 +113,10 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+      # Signs the in-app update files (D41). Without these secrets the build still works,
+      # but makes no update files, so installed apps can't update to this version.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     defaults:
       run:
         shell: bash
@@ -132,12 +136,20 @@ jobs:
       - name: Install front-end packages
         working-directory: app
         run: npm ci --no-audit --no-fund
+      - name: Update signing
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "UPDATER_ARGS=" >> "$GITHUB_ENV"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: no in-app update files in this build (see README, Releasing)"
+            echo 'UPDATER_ARGS=--config {"bundle":{"createUpdaterArtifacts":false}}' >> "$GITHUB_ENV"
+          fi
 
       # ---------------- macOS ----------------
       - name: Build the app (universal .app + .dmg, ad-hoc signed)
         if: runner.os == 'macOS'
         working-directory: app
-        run: npx tauri build --target universal-apple-darwin --bundles app,dmg
+        run: npx tauri build --target universal-apple-darwin --bundles app,dmg $UPDATER_ARGS
       - name: Build the command-line tool (universal)
         if: runner.os == 'macOS'
         run: |
@@ -154,6 +166,13 @@ jobs:
           mkdir -p dist
           dmg=$(ls target/universal-apple-darwin/release/bundle/dmg/*.dmg)
           cp "$dmg" "dist/LUT-Matrix_${VERSION}_macOS_universal.dmg"
+          # In-app update: the signed app archive.
+          upd="target/universal-apple-darwin/release/bundle/macos/LUT Matrix.app.tar.gz"
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            test -f "$upd" && test -f "$upd.sig" || { echo "::error::no signed update archive"; ls -la target/universal-apple-darwin/release/bundle/macos; exit 1; }
+            cp "$upd" "dist/LUT-Matrix_${VERSION}_macOS_universal.app.tar.gz"
+            cp "$upd.sig" "dist/LUT-Matrix_${VERSION}_macOS_universal.app.tar.gz.sig"
+          fi
           cp README.md LICENSE NOTICE cli/
           tar -czf "dist/lutmatrix-cli_${VERSION}_macOS_universal.tar.gz" -C cli .
 
@@ -180,7 +199,7 @@ jobs:
         working-directory: app
         run: |
           # WiX (MSI) only accepts numeric pre-release versions; build just NSIS for e.g. 0.2.0-beta.1.
-          if [ "$PRERELEASE" = true ]; then npx tauri build --bundles nsis; else npx tauri build --bundles nsis,msi; fi
+          if [ "$PRERELEASE" = true ]; then npx tauri build --bundles nsis $UPDATER_ARGS; else npx tauri build --bundles nsis,msi $UPDATER_ARGS; fi
       - name: Build the command-line tool
         if: runner.os == 'Windows'
         run: |
@@ -194,6 +213,14 @@ jobs:
           cp target/release/bundle/nsis/*-setup.exe "dist/LUT-Matrix_${VERSION}_Windows_x64-setup.exe"
           if ls target/release/bundle/msi/*.msi >/dev/null 2>&1; then
             cp target/release/bundle/msi/*.msi "dist/LUT-Matrix_${VERSION}_Windows_x64.msi"
+          fi
+          # In-app update: signatures of the installers (the installers are the update files).
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            ls target/release/bundle/nsis/*-setup.exe.sig >/dev/null 2>&1 || { echo "::error::no NSIS update signature"; ls -la target/release/bundle/nsis; exit 1; }
+            cp target/release/bundle/nsis/*-setup.exe.sig "dist/LUT-Matrix_${VERSION}_Windows_x64-setup.exe.sig"
+            if ls target/release/bundle/msi/*.msi.sig >/dev/null 2>&1; then
+              cp target/release/bundle/msi/*.msi.sig "dist/LUT-Matrix_${VERSION}_Windows_x64.msi.sig"
+            fi
           fi
           cp target/release/lutmatrix.exe README.md LICENSE NOTICE cli/
           (cd cli && 7z a -tzip "../dist/lutmatrix-cli_${VERSION}_Windows_x64.zip" . >/dev/null)
@@ -280,10 +307,18 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums and notes
+      - name: Checksums, notes and the update manifest
         run: |
           set -euo pipefail
           (cd dist && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # latest.json: what installed apps read to find this version (D41).
+          python3 tools/release_notes.py "$VERSION" > changes.md
+          if ls dist/*.sig >/dev/null 2>&1; then
+            python3 tools/updater_manifest.py dist "$VERSION" "$TAG" "$GITHUB_REPOSITORY" changes.md > dist/latest.json
+            cat dist/latest.json
+          else
+            echo "::warning::no update signatures: this release has no latest.json, installed apps won't offer it as an update"
+          fi
           {
             python3 tools/release_notes.py "$VERSION"
             echo

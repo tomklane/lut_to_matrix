@@ -28,7 +28,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "msi"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "msi"
+    ],
     "category": "Video",
     "shortDescription": "3x3 XYZ matrices and OpenDRT presets from camera LUTs",
     "copyright": "© 2026 tomklane. GPL-3.0-or-later; includes OpenDRT © Jed Smith (GPLv3).",
@@ -45,7 +50,21 @@
       "signingIdentity": "-"
     },
     "windows": {
-      "nsis": { "installMode": "currentUser" }
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBRjc5MDg1M0E4MTJDQTAKUldTZ0xJRTZoWkQzT25zR3ZCTHpxdE00Smczbjg5bVF0S01QbTBVK2tDUzFHZ25zSFQrZm10ZDEK",
+      "endpoints": [
+        "https://github.com/tomklane/lut_to_matrix/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -1,5 +1,8 @@
 <script lang="ts">
   import { app } from "../lib/state.svelte";
+  import { inTauri } from "../lib/api";
+  import { updates } from "../lib/updates.svelte";
+  import Toggle from "../lib/ui/Toggle.svelte";
 
   function close() {
     app.showAbout = false;
@@ -26,6 +29,22 @@
       Includes OpenDRT v1.1.0 © Jed Smith (GPLv3), github.com/jedypod/open-display-transform.
     </p>
     {#if app.info?.data_dir}<p class="small faint selectable">Data: {app.info.data_dir}</p>{/if}
+    {#if inTauri}
+      <div class="upd">
+        {#if updates.available}
+          <div class="small">Version {updates.available.version} is available.</div>
+          <button class="btn primary" onclick={() => updates.install()} disabled={updates.progress !== null}>
+            {updates.progress !== null ? `Installing… ${Math.round(100 * updates.progress)}%` : "Install and Relaunch"}
+          </button>
+        {:else}
+          <button class="btn" onclick={() => updates.check(true)} disabled={updates.checking}>
+            {updates.checking ? "Checking…" : "Check for Updates"}
+          </button>
+        {/if}
+        {#if updates.message}<div class="small muted">{updates.message}</div>{/if}
+        <label class="small muted auto"><Toggle bind:checked={updates.auto} label="Check for updates at launch" /> Check for updates at launch</label>
+      </div>
+    {/if}
     <button class="btn primary" onclick={close}>OK</button>
   </div>
 </div>
@@ -38,6 +57,18 @@
     display: grid;
     place-items: center;
     z-index: 70;
+  }
+  .upd {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 16px;
+  }
+  .auto {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .sheet {
     width: 380px;

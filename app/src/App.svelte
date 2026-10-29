@@ -10,6 +10,8 @@
   import PresetsView from "./views/PresetsView.svelte";
   import BatchView from "./views/BatchView.svelte";
   import About from "./views/About.svelte";
+  import UpdateBanner from "./views/UpdateBanner.svelte";
+  import { updates } from "./lib/updates.svelte";
 
   import { analysisEffect, chartEffect } from "./lib/runner.svelte";
 
@@ -41,6 +43,8 @@
       app.notify(String(e), "error");
     }
     ready = true;
+    // Look for an update a few seconds after launch (quietly; About has the manual check).
+    if (updates.auto) setTimeout(() => updates.check(), 4000);
     app.refreshPresets();
     app.initBatch();
     listenForDrops(
@@ -142,6 +146,7 @@
         {/if}
       </div>
     </header>
+    <UpdateBanner />
     <section class="content">
       {#if ready}
         {#if app.view === "matrix"}
