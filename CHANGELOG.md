@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-29
+
 ### Added
 - **White balance in the chart DCTL** (DECISIONS D42): the correction is now a white
   balance (per-channel gains in linear DWG) followed by the matrix, with a *White
@@ -215,7 +217,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.1.0...v0.2.0
