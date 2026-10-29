@@ -651,7 +651,7 @@ pub fn clip_levels(img: &ChartImage) -> ClipLevels {
     let n = img.width * img.height;
     for ch in 0..3 {
         let mut mx = f32::NEG_INFINITY;
-        for p in img.data.chunks_exact(3) {
+        for p in img.data.as_chunks::<3>().0 {
             if p[ch].is_finite() {
                 mx = mx.max(p[ch]);
             }
@@ -660,7 +660,7 @@ pub fn clip_levels(img: &ChartImage) -> ClipLevels {
             continue;
         }
         let tol = 1e-4 * mx as f64 + half_code;
-        let at = img.data.chunks_exact(3).filter(|p| p[ch] as f64 >= mx as f64 - tol).count();
+        let at = img.data.as_chunks::<3>().0.iter().filter(|p| p[ch] as f64 >= mx as f64 - tol).count();
         if at as f64 > 5e-4 * n as f64 {
             high[ch] = high[ch].min(mx as f64 - tol);
         }
