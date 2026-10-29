@@ -5,7 +5,7 @@ members = ["crates/lutmatrix-core", "crates/lutmatrix-opendrt", "crates/lutmatri
 # The single source of truth for the app version. Every crate (and the Tauri
 # app, from stage 4) inherits it; it is stamped into every exported DCTL.
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["tomklane"]

@@ -10,6 +10,15 @@
 //!   (a baked-in tone curve, flare). The curve is linear below a toe so it stays monotonic
 //!   and finite for negative values.
 //!
+//!
+//! Every correction is also reported, and exported, as a **white balance** (per-channel
+//! gains in linear DWG, green = 1, that make the camera's mid gray equal R, G, B, after
+//! the tone curve) followed by the matrix that is left (`m_xyz_after_wb`); the DCTL can
+//! switch the white balance off for footage balanced in the raw decode (D42).
+//! - **Preserve neutrals** (either model): the matrix after the white balance keeps equal
+//!   R, G, B equal (every row in DWG sums to the same gain; one curve for all three
+//!   channels), so without the white balance clipped white stays white.
+//!
 //! Errors are ΔE2000 in CIELAB with the target's white (Y = 1 for a perfect reflector,
 //! scaled by the exposure). The optimiser minimises ΔL*a*b* (smooth), neutral patches
 //! weighted, seeded by least squares in XYZ (DECISIONS.md D39).
@@ -58,11 +67,22 @@ pub struct FitSettings {
     /// under water), which amplifies noise and makes colours off the chart less
     /// predictable.
     pub restraint: f64,
+    /// Equal R, G, B (linear DWG) in give equal R, G, B out, like an RGB mixer whose rows
+    /// sum to 1: clipped white stays white. Replaces `lock_neutral` (both can't hold for
+    /// a camera whose gray isn't neutral).
+    pub preserve_neutrals: bool,
 }
 
 impl Default for FitSettings {
     fn default() -> Self {
-        FitSettings { model: Model::Matrix, exposure: Exposure::Match, lock_neutral: true, neutral_weight: 2.0, restraint: 0.0 }
+        FitSettings {
+            model: Model::Matrix,
+            exposure: Exposure::Match,
+            lock_neutral: true,
+            neutral_weight: 2.0,
+            restraint: 0.0,
+            preserve_neutrals: false,
+        }
     }
 }
 
@@ -135,6 +155,18 @@ pub struct ChartFit {
     pub max_after: f64,
     pub neutral_after: f64,
     pub used: usize,
+    /// The camera's mid gray in linear DWG, green = 1 (its cast; a white balance in the
+    /// raw decode by the inverse gains makes it neutral).
+    pub gray_dwg: [f64; 3],
+    /// White balance: gains in linear DWG (green = 1) after the tone curve that give the
+    /// camera's mid gray the target gray's balance (near equal R, G, B). The correction = matrix after WB · gains · tone.
+    pub wb_gains: [f64; 3],
+    /// The matrix after the white balance, XYZ (D65) in → out.
+    #[serde(serialize_with = "crate::math::ser::mat")]
+    pub m_xyz_after_wb: Mat3,
+    /// The same in linear DWG.
+    #[serde(serialize_with = "crate::math::ser::mat")]
+    pub m_dwg_after_wb: Mat3,
     pub notes: Vec<String>,
 }
 
@@ -146,6 +178,19 @@ impl ChartFit {
             None => *xyz,
         };
         self.m_xyz * x
+    }
+
+    /// [`ChartFit::apply`] with the white balance step on or off (off: the matrix after
+    /// the white balance only, for footage balanced in the raw decode).
+    pub fn apply_wb(&self, xyz: &Vec3, white_balance: bool) -> Vec3 {
+        if white_balance {
+            return self.apply(xyz);
+        }
+        let x = match &self.tone {
+            Some(t) => davinci::dwg_to_xyz() * t.apply(&(davinci::xyz_to_dwg() * xyz)),
+            None => *xyz,
+        };
+        self.m_xyz_after_wb * x
     }
 }
 
@@ -209,7 +254,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         let idx = if mids.len() >= 2 { &mids } else { &neutrals };
         let w: Vec3 = idx.iter().map(|&i| tone_xyz(tone, &patches[i].xyz)).sum();
         let t: Vec3 = idx.iter().map(|&i| target[i]).sum();
-        (s.lock_neutral && w.norm() > 0.0).then_some((w, t))
+        (s.lock_neutral && !s.preserve_neutrals && w.norm() > 0.0).then_some((w, t))
     };
 
     // The plain white balance the restraint pulls towards.
@@ -240,8 +285,98 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         }
     };
 
-    let (m, tone) = match s.model {
-        Model::Matrix => {
+    // Black offsets are bounded relative to each channel's measured neutral-5-ish level in
+    // DWG (the flare a black offset models is a fraction of it).
+    let lvl: Vec3 = {
+        let idx = if mids.len() >= 2 { &mids } else { &neutrals };
+        idx.iter().map(|&i| davinci::xyz_to_dwg() * patches[i].xyz).sum::<Vec3>() / idx.len() as f64
+    };
+    let gray_dwg = if lvl.y.abs() > 1e-12 { [lvl.x / lvl.y, 1.0, lvl.z / lvl.y] } else { [1.0; 3] };
+    // White balance after the tone curve: DWG gains (green = 1) that give the mid gray
+    // the target gray's balance (equal R, G, B up to the chart's own slight tint); and
+    // the same as an XYZ matrix.
+    let balance = |tone: Option<&Tone>| -> [f64; 3] {
+        let idx = if mids.len() >= 2 { &mids } else { &neutrals };
+        let w = davinci::xyz_to_dwg() * idx.iter().map(|&i| tone_xyz(tone, &patches[i].xyz)).sum::<Vec3>();
+        let t = davinci::xyz_to_dwg() * idx.iter().map(|&i| target[i]).sum::<Vec3>();
+        let r = Vec3::new(t.x / w.x, t.y / w.y, t.z / w.z);
+        let g = |v: f64| if v.is_finite() && v > 0.0 && (v / r.y).is_finite() && r.y > 0.0 { v / r.y } else { 1.0 };
+        [g(r.x), 1.0, g(r.z)]
+    };
+    let gains_xyz = |g: [f64; 3]| davinci::dwg_to_xyz() * Mat3::from_diagonal(&Vec3::from(g)) * davinci::xyz_to_dwg();
+
+    // Preserve neutrals: after the white balance, the matrix in DWG with every row summing
+    // to g, q = [g, a01, a02, a10, a12, a20, a21]; the tone model adds one power and one
+    // black for all channels in front.
+    let preserved = s.preserve_neutrals.then(|| {
+        let to_xyz = |q: &[f64]| -> Mat3 {
+            let g = q[0];
+            let d = Mat3::new(g - q[1] - q[2], q[1], q[2], q[3], g - q[3] - q[4], q[4], q[5], q[6], g - q[5] - q[6]);
+            davinci::dwg_to_xyz() * d * davinci::xyz_to_dwg()
+        };
+        let pack = |m: &Mat3| -> Vec<f64> {
+            let d = davinci::xyz_to_dwg() * m * davinci::dwg_to_xyz();
+            let g = (d.row(0).sum() + d.row(1).sum() + d.row(2).sum()) / 3.0;
+            vec![g, d[(0, 1)], d[(0, 2)], d[(1, 0)], d[(1, 2)], d[(2, 0)], d[(2, 1)]]
+        };
+        // Restraint: towards a plain gain (an untouched mixer).
+        let pull = |q: &[f64], r: &mut Vec<f64>| {
+            if s.restraint > 0.0 {
+                let scale = 20.0 * s.restraint * (used.len() as f64 / 24.0).sqrt();
+                r.extend(q[1..7].iter().map(|v| v * scale));
+                r.extend([q[1] + q[2], q[3] + q[4], q[5] + q[6]].map(|v| v * scale));
+            }
+        };
+        let level = ((lvl.x + lvl.y + lvl.z).abs() / 3.0).max(1e-4);
+        let tone_of = |p: f64, b: f64| Tone { power: [p; 3], black: [b * level; 3] };
+        let resid_for = |with_tone: bool| {
+            move |q: &[f64]| -> Vec<f64> {
+                let off = if with_tone { 2 } else { 0 };
+                let t = with_tone.then(|| tone_of(q[0], q[1]));
+                let full = to_xyz(&q[off..]) * gains_xyz(balance(t.as_ref()));
+                let mut r = resid_m(t.as_ref(), &full);
+                pull(&q[off..], &mut r);
+                r
+            }
+        };
+        let resid = resid_for(false);
+        // Seeds: a plain gain, and the free least-squares fit made neutral-preserving.
+        let xs: Vec<Vec3> = used.iter().map(|&i| patches[i].xyz).collect();
+        let ys: Vec<Vec3> = used.iter().map(|&i| target[i]).collect();
+        let wt: Vec<f64> = used.iter().map(|&i| weight(i) / target[i].y.max(1e-3)).collect();
+        let g0 = gains_xyz(balance(None));
+        let mut seeds = vec![pack(&(Mat3::identity() * (k / ratio)))];
+        if let (Some(m0), Some(gi)) = (least_squares(&xs, &ys, Some(&wt)), g0.try_inverse()) {
+            seeds.push(pack(&(m0 * gi)));
+        }
+        let (lo, hi) = (vec![f64::NEG_INFINITY; 7], vec![f64::INFINITY; 7]);
+        let cost = |q: &[f64]| resid(q).iter().map(|v| v * v).sum::<f64>();
+        let best = seeds
+            .into_iter()
+            .map(|q| bounded_lm(&q, &lo, &hi, &resid, 300))
+            .min_by(|a, b| cost(a).total_cmp(&cost(b)))
+            .expect("at least one seed");
+        if s.model == Model::Matrix {
+            return (to_xyz(&best) * g0, None);
+        }
+        // Tone model: from the matrix (a power of 1 and no black are the identity), so it
+        // is never worse than the matrix alone.
+        let q0: Vec<f64> = [1.0, 0.0].into_iter().chain(best).collect();
+        let lo: Vec<f64> = [0.5, -0.3].into_iter().chain([f64::NEG_INFINITY; 7]).collect();
+        let hi: Vec<f64> = [2.0, 0.6].into_iter().chain([f64::INFINITY; 7]).collect();
+        let q = bounded_lm(&q0, &lo, &hi, &resid_for(true), 300);
+        let t = tone_of(q[0], q[1]);
+        (to_xyz(&q[2..]) * gains_xyz(balance(Some(&t))), Some(t))
+    });
+    if let Some((_, Some(t))) = &preserved {
+        if t.power[0] <= 0.501 || t.power[0] >= 1.999 {
+            notes.push("the tone curve reached its power limit (0.5 or 2): the neutral row is far from linear".into());
+        }
+    }
+
+    let (m, tone) = match (preserved, s.model) {
+        (Some(r), _) => r,
+        (None, Model::Matrix) => {
             let m0 = ls(None).ok_or("the measured patches don't span three colour dimensions")?;
             let m_wb = wb(None);
             let res = |m: &Mat3| {
@@ -255,13 +390,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
             };
             (m, None)
         }
-        Model::MatrixTone => {
-            // Black offsets are bounded relative to each channel's measured neutral-5-ish
-            // level in DWG (the flare a black offset models is a fraction of it).
-            let lvl: Vec3 = {
-                let idx = if mids.len() >= 2 { &mids } else { &neutrals };
-                idx.iter().map(|&i| davinci::xyz_to_dwg() * patches[i].xyz).sum::<Vec3>() / idx.len() as f64
-            };
+        (None, Model::MatrixTone) => {
             let lvl = lvl.map(|v| v.abs().max(1e-4));
             let m0 = ls(None).ok_or("the measured patches don't span three colour dimensions")?;
             let mut p0: Vec<f64> = vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0];
@@ -315,10 +444,15 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         }
     };
 
+    let wb_gains = balance(tone.as_ref());
+    let m_after = m * gains_xyz(wb_gains).try_inverse().unwrap_or_else(Mat3::identity);
     let fit = ChartFit {
         settings: *s,
         m_xyz: m,
         m_dwg: davinci::xyz_to_dwg() * m * davinci::dwg_to_xyz(),
+        wb_gains,
+        m_xyz_after_wb: m_after,
+        m_dwg_after_wb: davinci::xyz_to_dwg() * m_after * davinci::dwg_to_xyz(),
         tone,
         exposure_ratio: ratio,
         neutral_gain: 0.0,
@@ -329,6 +463,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         max_after: 0.0,
         neutral_after: 0.0,
         used: used.len(),
+        gray_dwg,
         notes,
     };
     let de_after: Vec<f64> = (0..patches.len())
@@ -347,6 +482,16 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     fit.neutral_after = mean(&de_after, &neutrals);
     fit.neutral_gain = g;
     fit.de_after = de_after;
+    let w = fit.m_dwg * Vec3::repeat(1.0);
+    if w.min() < 0.8 * w.max() {
+        fit.notes.push(format!(
+            "equal R, G, B (clipped white) comes out R {:.2} : G {:.2} : B {:.2}: turn on highlight protection for the DCTL, \
+             or white-balance in the raw decode and switch the DCTL's white balance off",
+            w.x / w.max(),
+            w.y / w.max(),
+            w.z / w.max()
+        ));
+    }
     if fit.mean_after > 6.0 {
         fit.notes.push(format!(
             "mean error after correction is {:.1} ΔE2000: the camera's colours differ from the chart in ways a {} can't \
@@ -489,6 +634,111 @@ mod tests {
         let m = fit_chart(&p, &FitSettings::default()).unwrap();
         let t = fit_chart(&p, &FitSettings { model: Model::MatrixTone, ..Default::default() }).unwrap();
         assert!(t.mean_after < 0.3 && t.mean_after < 0.3 * m.mean_after, "tone {} vs matrix {}", t.mean_after, m.mean_after);
+    }
+
+    /// A cyan underwater-like cast in DWG (red barely recorded), as XYZ → XYZ.
+    fn cast() -> Mat3 {
+        let c = Mat3::new(0.5, 0.05, 0.0, 0.0, 0.8, 0.02, 0.0, 0.03, 1.0);
+        davinci::dwg_to_xyz() * c * davinci::xyz_to_dwg()
+    }
+
+    fn row_sums_dwg(f: &ChartFit) -> Vec3 {
+        f.m_dwg * Vec3::repeat(1.0)
+    }
+
+    #[test]
+    fn white_balance_split_and_preserve_neutrals() {
+        // A look that keeps D65 neutral: (almost) no white balance, preserving costs next
+        // to nothing (the chart's grays are slightly tinted, so the look moves them a bit).
+        let c = cam();
+        let p = patches(|t| c * t);
+        let s = FitSettings { preserve_neutrals: true, ..Default::default() };
+        let f = fit_chart(&p, &s).unwrap();
+        assert!(f.mean_after < 0.1, "{}", f.mean_after);
+        assert!(f.wb_gains.iter().all(|g| (g - 1.0).abs() < 0.01), "{:?}", f.wb_gains);
+        let r = f.m_dwg_after_wb * Vec3::repeat(1.0);
+        assert!((r.x - r.y).abs() < 1e-9 && (r.z - r.y).abs() < 1e-9, "{r}");
+        // A cast: the free fit turns equal RGB red. Split into white balance + matrix,
+        // the matrix keeps (nearly) neutral, exactly so when preserving, and preserving
+        // fits as well because the white balance does the balancing.
+        let c = cast();
+        let p = patches(|t| c * t);
+        let free = fit_chart(&p, &FitSettings::default()).unwrap();
+        let w = row_sums_dwg(&free);
+        assert!(w.x > 1.5 * w.y, "free fit keeps white? {w}");
+        assert!(free.notes.iter().any(|n| n.contains("clipped white")), "{:?}", free.notes);
+        // Gray = row sums of the cast: R 0.55 : G 0.82 : B 1.03; gains undo it.
+        assert!((free.gray_dwg[0] - 0.55 / 0.82).abs() < 0.01 && (free.gray_dwg[2] - 1.03 / 0.82).abs() < 0.01, "{:?}", free.gray_dwg);
+        // (to the chart's gray, within a couple of percent of equal RGB)
+        assert!((free.wb_gains[0] * free.gray_dwg[0] - 1.0).abs() < 0.03 && (free.wb_gains[2] * free.gray_dwg[2] - 1.0).abs() < 0.03, "{:?}", free.wb_gains);
+        let n = free.m_dwg_after_wb * Vec3::repeat(1.0);
+        assert!((n.x / n.y - 1.0).abs() < 0.02 && (n.z / n.y - 1.0).abs() < 0.02, "{n}");
+        let f = fit_chart(&p, &s).unwrap();
+        let r = f.m_dwg_after_wb * Vec3::repeat(1.0);
+        assert!((r.x - r.y).abs() < 1e-9 && (r.z - r.y).abs() < 1e-9, "{r}");
+        assert!(f.mean_after < free.mean_after + 0.05 && f.mean_after < 0.05, "{} vs {}", f.mean_after, free.mean_after);
+        // The pieces multiply back to the whole correction; white balance off keeps
+        // equal RGB equal.
+        let x = Vec3::new(0.3, 0.5, 0.7);
+        let xyz = davinci::dwg_to_xyz() * x;
+        let whole = davinci::xyz_to_dwg() * f.apply(&xyz);
+        let split = f.m_dwg_after_wb * x.component_mul(&Vec3::from(f.wb_gains));
+        assert!((whole - split).abs().max() < 1e-9);
+        let e = davinci::xyz_to_dwg() * f.apply_wb(&(davinci::dwg_to_xyz() * Vec3::repeat(0.7)), false);
+        assert!((e.x - e.y).abs() < 1e-9 && (e.z - e.y).abs() < 1e-9, "{e}");
+        // Neutral lock is ignored, the result the same.
+        let g = fit_chart(&p, &FitSettings { lock_neutral: false, ..s }).unwrap();
+        assert!((g.m_xyz - f.m_xyz).abs().max() < 1e-6);
+        // Tone model: one curve for all channels, still neutral-preserving after the WB.
+        let t = fit_chart(&p, &FitSettings { model: Model::MatrixTone, ..s }).unwrap();
+        let tone = t.tone.unwrap();
+        assert!(tone.power[0] == tone.power[1] && tone.power[1] == tone.power[2] && tone.black[0] == tone.black[2]);
+        let y = davinci::xyz_to_dwg() * t.apply_wb(&(davinci::dwg_to_xyz() * Vec3::repeat(0.7)), false);
+        assert!((y.x - y.y).abs() < 1e-9 * y.y.abs().max(1.0) && (y.z - y.y).abs() < 1e-9 * y.y.abs().max(1.0), "{y}");
+        assert!(t.mean_after < f.mean_after + 0.3, "{} vs {}", t.mean_after, f.mean_after);
+    }
+
+    #[test]
+    fn highlight_protection_turns_clipped_white_white() {
+        use crate::chart::highlights::{ClipSource, Highlights};
+        let c = cast();
+        let p = patches(|t| c * t);
+        let f = fit_chart(&p, &FitSettings::default()).unwrap();
+        let hl = Highlights {
+            enabled: true,
+            clip_di: 0.68,
+            source: ClipSource::Set,
+            measured_di: 0.68,
+            measured_source: ClipSource::Set,
+            softness: 1.0,
+            strength: 1.0,
+        };
+        let lc = davinci::di_decode(0.68);
+        let chroma = |v: &Vec3| (v.x / (v.x + v.y + v.z), v.y / (v.x + v.y + v.z));
+        let d65 = chroma(&(davinci::dwg_to_xyz() * Vec3::repeat(1.0)));
+        // Clipped in every channel: rebuilt to the camera's white, which the correction
+        // makes neutral; unprotected it is far from neutral. Both with the white balance
+        // on and (camera white = equal RGB) off.
+        for wb in [true, false] {
+            let px = Vec3::repeat(lc);
+            let out = chroma(&hl.apply(&f, &px, wb));
+            assert!((out.0 - d65.0).abs() < 2e-3 && (out.1 - d65.1).abs() < 2e-3, "wb {wb}: {out:?} vs {d65:?}");
+        }
+        let raw = chroma(&f.apply(&(davinci::dwg_to_xyz() * Vec3::repeat(lc))));
+        assert!((raw.0 - d65.0).abs() > 0.02, "unprotected {raw:?}");
+        // Well below the clip: untouched. A channel far below the clip next to a clipped
+        // one: untouched too.
+        let px = Vec3::new(0.05, 0.1, 0.12);
+        assert!((hl.apply(&f, &px, true) - f.apply(&(davinci::dwg_to_xyz() * px))).abs().max() < 1e-12);
+        let px = Vec3::new(0.05 * lc, lc, 0.04 * lc);
+        let rb = hl.rebuild(&px, &Highlights::camera_white(&f, true));
+        assert!((rb - px).abs().max() < 1e-12, "{rb}");
+        assert_eq!(hl.weight(lc * 0.5), 0.0);
+        assert!((hl.weight(lc * 0.5f64.sqrt()) - 0.5).abs() < 1e-9);
+        // Off: the plain correction.
+        let off = Highlights { enabled: false, ..hl };
+        let px = Vec3::repeat(lc);
+        assert!((off.apply(&f, &px, true) - f.apply(&(davinci::dwg_to_xyz() * px))).abs().max() < 1e-12);
     }
 
     #[test]

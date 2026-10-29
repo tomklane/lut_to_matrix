@@ -58,7 +58,11 @@ with a clipped channel are left out and marked; click a patch to leave it out to
 *Place by hand…* if the chart isn't found. The correction to the published chart, or to
 another camera's chart (*Another camera*), updates as you change anything: *Export
 DCTL…* writes it as a DWG/DI DCTL, and *Fit Preset* fits an OpenDRT look preset (after
-the matrix by default) that you can save to the library. Export stills as half-float
+the matrix by default) that you can save to the library. If clipped highlights turn a
+colour (a red or magenta sun under water), turn on *Highlight protection* for the DCTL.
+The DCTL's *White Balance* checkbox turns the white balance part of the correction off
+for footage white-balanced in the raw decode; *Preserve neutrals* keeps the rest of the
+correction from tinting white. Export stills as half-float
 EXR when you can: 16-bit integer files can't hold the negative values that saturated
 colours often have.
 
@@ -185,6 +189,8 @@ lutmatrix chart still.exr --curve linear --gamut xyz        # say what the still
 lutmatrix chart still.tif --model tone --restraint 0.25     # add a per-channel tone curve; gentler matrix
 lutmatrix chart b_cam.tif --target a_cam.tif --dctl b_to_a.dctl   # match camera B to camera A's chart
 lutmatrix chart still.tif --opendrt --save "Chart Cam B"    # also fit an OpenDRT preset (after the matrix)
+lutmatrix chart still.tif --protect-highlights --dctl c.dctl # clipped areas go to white (clip measured, or --clip-di 0.68)
+lutmatrix chart still.tif --preserve-neutrals --dctl c.dctl  # matrix after the white balance keeps equal RGB equal
 ```
 
 ### Batch: every negative × every print, plus full LUTs

@@ -575,3 +575,48 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Without the secrets the workflow still builds (update artifacts switched off, with a
   warning), so forks and test builds keep working.
 - Versions older than 0.4.0 have no updater: they are updated once by hand.
+
+## D42 — Clipped highlights: white balance split, preserve neutrals, highlight protection (user request 2026-10-29)
+- Problem: under strongly coloured light (under water) the camera's gray is far from equal
+  R, G, B (0.34 : 1 : 1.22 in linear DWG for the user's UW_2). A chart fit makes that
+  gray neutral with a large red gain, so equal R, G, B, which is what the file holds where
+  every channel clipped, comes out red (1 : −0.03 : 0.14 through UW_2); OpenDRT shows a
+  magenta sun. Where only green clips the ratios are wrong the same way (pink halo). No
+  colour-only correction (matrix, TPS, 3D LUT) can tell clipped values from real ones.
+- **White balance split** (always): every correction is reported and exported as gains
+  in linear DWG (green = 1, after the tone curve) that give the camera's mid gray the
+  target gray's balance, then the matrix that is left (`m_xyz_after_wb`; the DCTL's
+  `M_XYZ`). Gains to the target gray rather than to exact equal RGB, so a look that keeps
+  D65 neutral gets gains ≈ 1 (the chart's grays are slightly tinted). The DCTL has a
+  *White Balance* checkbox (default on, app setting): on = exactly the fitted correction;
+  off = the matrix only, for footage white-balanced in the raw decode, where highlights
+  are handled before the correction.
+- **Preserve neutrals** (fit setting, default off): the matrix after the white balance
+  keeps equal R, G, B equal (DWG rows sum to one gain g, 7 parameters, like an RGB mixer
+  whose rows sum to 1; the tone model shares one power and black). It replaces the
+  neutral lock (the white balance makes the gray neutral). Any correction that maps the
+  gray to neutral splits exactly this way, so preserving costs little: 6.48 vs 6.51 ΔE on
+  the underwater chart. With the checkbox off, clipped white stays white.
+- **Highlight protection** (DCTL option, default off): clipped channels are rebuilt
+  towards the camera's white. With `white` = the chart's gray (white balance on) or
+  equal RGB (off), the estimate is `white · max_k(x_k / white_k)`, the darkest colour of
+  the camera's white balance at least as bright as the pixel in every channel; each
+  channel is raised towards it by its own weight, smoothstep from 0 at `softness` stops
+  below the clip to `strength` at the clip. A fully clipped pixel becomes the camera's
+  white, which the correction makes neutral; a channel far from the clip is never
+  touched, so bright unclipped colours (the water around the sun, where only green
+  clips but red is low) keep theirs.
+- Rejected first version: pulling the input to its brightest channel (equal RGB) and the
+  output to a neutral of the same luminance, with a detect slider (any … all channels).
+  Equal RGB is exactly the wrong guess under coloured light; triggering on any channel
+  whitened 3.6 % of the frame (all bright water), on all channels it left the pink ring.
+  On the user's 1.21.5 still with UW_2 + OpenDRT the rebuild removes both the magenta core
+  and the ring, and changes nothing outside the highlight.
+- Clip level: measured from the chart still where a channel piles up at its maximum
+  (the earliest-clipping channel, taken as neutral, converted to DI through the still's
+  encoding); else the still's brightest value, flagged "set it to where the footage
+  clips"; or set by hand. Defaults in the DCTL are these values; ranges 0.2–1.0 DI and
+  0.1–4 stops.
+- Rust (`chart::highlights::Highlights::apply`, `ChartFit::apply_wb`) and the DCTL use the
+  same formulas; the DCTL test compiles it as C and C++ and compares (protection, the
+  preserving fit, both models, white balance on and off).

@@ -6,6 +6,24 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-29
+
+### Added
+- **White balance in the chart DCTL** (DECISIONS D42): the correction is now a white
+  balance (per-channel gains in linear DWG) followed by the matrix, with a *White
+  Balance* checkbox in the DCTL. On, it is the same correction as before; off, only the
+  matrix runs, for footage white-balanced in the raw decode. The app shows the gains.
+- **Preserve neutrals** for chart corrections (D42): the matrix after the white balance
+  keeps equal R, G, B equal, like an RGB mixer whose rows sum to 1, so with the white
+  balance off clipped white stays white. Costs almost nothing in accuracy. The fit shows
+  the camera's gray and what equal R, G, B becomes with the white balance on and off.
+- **Highlight protection** in the chart DCTL (D42): clipped channels are rebuilt towards
+  the camera's own white, so a clipped sun comes out white instead of red or magenta,
+  without touching bright colours that aren't clipped. The clip level is measured from
+  the still (or set by hand); strength, clip level and softness are sliders in the DCTL.
+  CLI: `--preserve-neutrals`, `--protect-highlights`, `--clip-di`,
+  `--highlight-softness`, `--no-white-balance`.
+
 ## [0.4.0] - 2026-10-29
 
 ### Added
@@ -199,7 +217,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.1.0...v0.2.0
