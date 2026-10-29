@@ -560,6 +560,20 @@
             <div class="label">Fit tone<div class="sub">Contrast and black offset too, not only colour</div></div>
             <div class="value"><Toggle bind:checked={app.odrtChart.fit_tone} label="Fit tone" /></div>
           </div>
+          <div class="row">
+            <div class="label">Smoothing<div class="sub">Pull towards the look: 24 patches can't pin down every parameter</div></div>
+            <div class="value">
+              <Segmented
+                bind:value={app.odrtChart.regularization}
+                label="Smoothing"
+                options={[
+                  { value: 3, label: "Light" },
+                  { value: 6, label: "Normal" },
+                  { value: 12, label: "Strong" },
+                ]}
+              />
+            </div>
+          </div>
           <div class="row go">
             {#if app.odrtChartRunning}
               <div class="spinner"></div>

@@ -234,7 +234,7 @@ pub fn fit_opendrt_chart(a: &ChartAnalysis, s: &OdrtChartSettings) -> Result<Odr
     }
     if safety.roughness > 1.5 * safety.stock_roughness {
         notes.push(format!(
-            "sharper transitions than the stock looks (max second difference {:.3} vs {:.3}); raise the regularisation",
+            "sharper transitions than the stock looks (max second difference {:.3} vs {:.3}); more smoothing (regularisation) helps",
             safety.roughness, safety.stock_roughness
         ));
     }
