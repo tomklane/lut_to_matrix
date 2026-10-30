@@ -60,9 +60,11 @@ another camera's chart (*Another camera*), updates as you change anything: *Expo
 DCTL…* writes it as a DWG/DI DCTL, and *Fit Preset* fits an OpenDRT look preset (after
 the matrix by default) that you can save to the library. If clipped highlights turn a
 colour (a red or magenta sun under water), turn on *Highlight protection* for the DCTL.
-The DCTL's *White Balance* checkbox turns the white balance part of the correction off
+Tick *WB Done In Raw* in the DCTL to turn the white balance part of the correction off
 for footage white-balanced in the raw decode; *Preserve neutrals* keeps the rest of the
-correction from tinting white. Export stills as half-float
+correction from tinting white. Under the image, *Before / After / Split* shows the
+correction as the DCTL applies it (plain or through OpenDRT), and *Other Still…* shows
+it on another still from the same camera. Export stills as half-float
 EXR when you can: 16-bit integer files can't hold the negative values that saturated
 colours often have.
 

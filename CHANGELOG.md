@@ -6,6 +6,23 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-30
+
+### Added
+- **Before and after in the chart view** (DECISIONS D43): *Before*, *After* or *Split*
+  (drag the line) under the image. *After* is the correction exactly as the exported
+  DCTL applies it, with the white balance and highlight protection settings. Show it as
+  plain Rec.709 or through OpenDRT with the look chosen for the preset. *Other Still…*
+  shows the correction on another still from the same camera, no chart needed (e.g. a
+  shot with the sun in it).
+
+### Fixed
+- **Chart DCTL white balance** (DECISIONS D42): the 0.5.0 *White Balance* checkbox
+  could come in unticked when Resolve updated the DCTL in an existing node, so the
+  colour cast was no longer corrected. It is now *WB Done In Raw*, unticked by default:
+  an unticked box gives the full correction, as in 0.4.0. If you use a 0.5.0 DCTL, tick
+  its *White Balance* box, or export it again.
+
 ## [0.5.0] - 2026-10-29
 
 ### Added
@@ -217,7 +234,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.2.0...v0.3.0

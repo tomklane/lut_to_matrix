@@ -486,7 +486,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     if w.min() < 0.8 * w.max() {
         fit.notes.push(format!(
             "equal R, G, B (clipped white) comes out R {:.2} : G {:.2} : B {:.2}: turn on highlight protection for the DCTL, \
-             or white-balance in the raw decode and switch the DCTL's white balance off",
+             or white-balance in the raw decode and tick the DCTL's “WB Done In Raw”",
             w.x / w.max(),
             w.y / w.max(),
             w.z / w.max()

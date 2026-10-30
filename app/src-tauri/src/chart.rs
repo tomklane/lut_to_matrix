@@ -10,7 +10,7 @@ use lutmatrix_core::chart::encoding::{still_curves, StillGamut, StillSpace};
 use lutmatrix_core::chart::image::{ChartImage, ImageInfo};
 use lutmatrix_core::chart::odrt::{fit_opendrt_chart, OdrtChartFit, OdrtChartSettings, DISPLAYS};
 use lutmatrix_core::chart::reference::{ChartEdition, PATCH_NAMES};
-use lutmatrix_core::chart::{analyze, base64, preview_jpeg, ChartAnalysis, ChartSettings};
+use lutmatrix_core::chart::{analyze, base64, preview_jpeg_with, ChartAnalysis, ChartSettings, PreviewCorrection, PreviewDisplay};
 use lutmatrix_core::dctl::today_utc;
 use lutmatrix_core::preset_store::{PresetStore, StoredPreset};
 use lutmatrix_core::spaces::curves::LogCurve;
@@ -168,11 +168,33 @@ pub struct Preview {
     scale: f64,
 }
 
+/// A preview of any still (the chart still, or another one from the same camera):
+/// decoded with `space`, shown at the target's exposure. `corrected`: with the
+/// correction on screen applied, as the exported DCTL does it.
 #[tauri::command]
-pub async fn chart_preview(path: String, space: StillSpace, exposure_ratio: f64, state: State<'_, ChartState>) -> CmdResult<Preview> {
-    let s = still(&state.0, &path)?;
+pub async fn chart_preview(
+    path: String,
+    space: StillSpace,
+    exposure_ratio: f64,
+    corrected: Option<bool>,
+    display: Option<PreviewDisplay>,
+    state: State<'_, ChartState>,
+) -> CmdResult<Preview> {
+    let st = state.0.clone();
+    let s = tauri::async_runtime::spawn_blocking(move || still(&st, &path)).await.map_err(err)??;
+    let analysis = if corrected.unwrap_or(false) {
+        let a = state.0.analysis.lock().unwrap().clone().ok_or("no correction yet")?;
+        a.fit.as_ref().ok_or("no correction (the fit failed)")?;
+        Some(a)
+    } else {
+        None
+    };
+    let display = display.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        let (jpg, w, h) = preview_jpeg(&s.img, &space, exposure_ratio, 1800);
+        let corr = analysis.as_ref().and_then(|a| {
+            Some(PreviewCorrection { fit: a.fit.as_ref()?, highlights: &a.highlights, white_balance: a.white_balance })
+        });
+        let (jpg, w, h) = preview_jpeg_with(&s.img, &space, exposure_ratio, corr, display, 1600);
         Preview {
             data_url: format!("data:image/jpeg;base64,{}", base64(&jpg)),
             width: w,

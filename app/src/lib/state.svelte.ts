@@ -86,6 +86,14 @@ class AppState {
   chartAnalyzing = $state(false);
   chartError = $state<string | null>(null);
   chartPreview = $state<ChartPreview | null>(null);
+  /** The corrected preview (of the chart still, or of `compareStill`). */
+  chartAfter = $state<ChartPreview | null>(null);
+  /** What the viewer shows. */
+  chartView = $state<"before" | "after" | "split">("before");
+  /** Preview display: simple, or through OpenDRT with the look chosen for the preset. */
+  chartDisplay = $state<"simple" | "opendrt">("simple");
+  /** Another still from the same camera to look at the correction on (no chart needed). */
+  compareStill = $state<LoadedStill | null>(null);
   odrtChart = $state<OdrtChartSettings>(structuredClone(defaultOdrtChart));
   odrtChartFit = $state<OdrtChartFit | null>(null);
   odrtChartRunning = $state(false);
@@ -101,6 +109,8 @@ class AppState {
       this.chartAnalysis = null;
       this.chartError = null;
       this.chartPreview = null;
+      this.chartAfter = null;
+      this.compareStill = null;
       this.odrtChartFit = null;
       this.odrtChartError = null;
       this.lastDir = dirName(path);
@@ -110,6 +120,16 @@ class AppState {
       this.notify(String(e), "error");
     } finally {
       this.loadingStill = false;
+    }
+  }
+
+  async openCompareStill(path: string) {
+    try {
+      this.compareStill = await api.chartLoad(path);
+      this.chartAfter = null;
+      if (this.chartView === "before") this.chartView = "split";
+    } catch (e) {
+      this.notify(String(e), "error");
     }
   }
 
@@ -201,6 +221,7 @@ class AppState {
       chartEdition: this.chart.edition,
       chartHighlights: $state.snapshot(this.chart.highlights),
       chartWhiteBalance: this.chart.white_balance,
+      chartDisplay: this.chartDisplay,
       odrtChart: $state.snapshot(this.odrtChart),
       autoUpdate: updates.auto,
       through: this.through ? $state.snapshot(this.through) : null,
@@ -219,6 +240,7 @@ class AppState {
     if (prefs.chartHighlights && typeof prefs.chartHighlights === "object")
       this.chart.highlights = { ...structuredClone(defaultHighlights), ...(prefs.chartHighlights as Partial<HighlightSettings>) };
     if (typeof prefs.chartWhiteBalance === "boolean") this.chart.white_balance = prefs.chartWhiteBalance;
+    if (prefs.chartDisplay === "simple" || prefs.chartDisplay === "opendrt") this.chartDisplay = prefs.chartDisplay;
     if (prefs.odrtChart && typeof prefs.odrtChart === "object")
       this.odrtChart = { ...structuredClone(defaultOdrtChart), ...(prefs.odrtChart as Partial<OdrtChartSettings>) };
     if (prefs.settings && typeof prefs.settings === "object")

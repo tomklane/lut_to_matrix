@@ -458,31 +458,103 @@ impl ChartAnalysis {
     }
 }
 
+/// How a preview is shown on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum PreviewDisplay {
+    /// Rec.709 / sRGB with a soft highlight roll-off.
+    #[default]
+    Simple,
+    /// OpenDRT (DWG/DI in) with this look and tonescale preset, Rec.1886 out: how the
+    /// footage looks after "chart DCTL → OpenDRT".
+    OpenDrt { look: usize, tonescale: usize },
+}
+
+/// The correction a preview shows (the DCTL as exported, `Amount` = 1).
+#[derive(Debug, Clone, Copy)]
+pub struct PreviewCorrection<'a> {
+    pub fit: &'a ChartFit,
+    pub highlights: &'a Highlights,
+    pub white_balance: bool,
+}
+
 /// A display preview of the still (JPEG bytes, width, height): decoded with `space`,
 /// exposure scaled by 1/`exposure_ratio` so the chart's grays sit at their reflectance,
 /// a soft highlight roll-off, sRGB. At most `max_side` pixels across.
 pub fn preview_jpeg(img: &ChartImage, space: &StillSpace, exposure_ratio: f64, max_side: usize) -> (Vec<u8>, usize, usize) {
+    preview_jpeg_with(img, space, exposure_ratio, None, PreviewDisplay::Simple, max_side)
+}
+
+/// [`preview_jpeg`] with the correction applied (if any) and shown on `display`. The
+/// correction runs on the still's own values (so highlight protection sees the real
+/// clip level); before and after are shown at the same exposure (the target's).
+pub fn preview_jpeg_with(
+    img: &ChartImage,
+    space: &StillSpace,
+    exposure_ratio: f64,
+    correction: Option<PreviewCorrection>,
+    display: PreviewDisplay,
+    max_side: usize,
+) -> (Vec<u8>, usize, usize) {
+    use crate::spaces::davinci::{di_encode, xyz_to_dwg};
     let step = img.width.max(img.height).div_ceil(max_side).max(1);
     let (w, h) = (img.width / step, img.height / step);
-    let m = DisplayGamut::Rec709.primaries().xyz_to_rgb() * space.gamut.rgb_to_xyz_d65();
-    let c = space.curve;
-    let k = 1.0 / exposure_ratio.max(1e-9);
-    let enc = |v: f64| {
+    let to709 = DisplayGamut::Rec709.primaries().xyz_to_rgb();
+    let ratio = exposure_ratio.max(1e-9);
+    // Corrected values are at the target's exposure unless the fit keeps the still's.
+    let scale = match correction {
+        Some(c) if c.fit.settings.exposure == fit::Exposure::Match => 1.0,
+        _ => 1.0 / ratio,
+    };
+    let drt = match display {
+        PreviewDisplay::OpenDrt { look, tonescale } => {
+            let p = lutmatrix_opendrt::Presets { look, tonescale, ..Default::default() };
+            Some(lutmatrix_opendrt::OpenDrt::new(&lutmatrix_opendrt::Config::from_presets(&p).unwrap_or_default()))
+        }
+        PreviewDisplay::Simple => None,
+    };
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let simple = |v: f64| {
         let v = v.max(0.0);
         let v = v * (1.0 + v / 4.0) / (1.0 + v);
-        let e = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-        (e.clamp(0.0, 1.0) * 255.0).round() as u8
+        byte(if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 })
     };
-    // Decoding is per channel, so tabulate it for integer files.
-    let mut out = Vec::with_capacity(w * h * 3);
-    for y in 0..h {
-        for x in 0..w {
-            let p = img.pixel(x * step + step / 2, y * step + step / 2);
-            let lin = Vec3::new(c.decode(p[0] as f64), c.decode(p[1] as f64), c.decode(p[2] as f64));
-            let rgb = m * lin * k;
-            out.extend([enc(rgb.x), enc(rgb.y), enc(rgb.z)]);
+    let pixel = |x: usize, y: usize| -> [u8; 3] {
+        let p = img.pixel(x * step + step / 2, y * step + step / 2);
+        let xyz = space.to_xyz(&[p[0] as f64, p[1] as f64, p[2] as f64]);
+        let xyz = match correction {
+            Some(c) => c.highlights.apply(c.fit, &(xyz_to_dwg() * xyz), c.white_balance),
+            None => xyz,
+        } * scale;
+        if !xyz.iter().all(|v| v.is_finite()) {
+            return [0; 3];
         }
-    }
+        match &drt {
+            Some(d) => {
+                let di = (xyz_to_dwg() * xyz).map(di_encode);
+                let o = d.apply([di.x as f32, di.y as f32, di.z as f32]);
+                [byte(o[0] as f64), byte(o[1] as f64), byte(o[2] as f64)]
+            }
+            None => {
+                let rgb = to709 * xyz;
+                [simple(rgb.x), simple(rgb.y), simple(rgb.z)]
+            }
+        }
+    };
+    let mut out = vec![0u8; w * h * 3];
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 16);
+    let rows = h.div_ceil(threads).max(1);
+    std::thread::scope(|sc| {
+        for (k, chunk) in out.chunks_mut(rows * w * 3).enumerate() {
+            let pixel = &pixel;
+            sc.spawn(move || {
+                for (i, px) in chunk.chunks_mut(3).enumerate() {
+                    let (x, y) = (i % w, k * rows + i / w);
+                    px.copy_from_slice(&pixel(x, y));
+                }
+            });
+        }
+    });
     let mut buf = Vec::new();
     let _ = ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 88).encode(&out, w as u32, h as u32, ::image::ExtendedColorType::Rgb8);
     (buf, w, h)

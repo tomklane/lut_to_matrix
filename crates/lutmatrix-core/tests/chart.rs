@@ -10,7 +10,7 @@ use lutmatrix_core::chart::highlights::{ClipSource, HighlightSettings};
 use lutmatrix_core::chart::image::ChartImage;
 use lutmatrix_core::chart::odrt::{fit_opendrt_chart, OdrtChartSettings};
 use lutmatrix_core::chart::reference::ChartEdition;
-use lutmatrix_core::chart::{analyze, ChartSettings};
+use lutmatrix_core::chart::{analyze, preview_jpeg_with, ChartSettings, PreviewCorrection, PreviewDisplay};
 use lutmatrix_core::detect::Confidence;
 use lutmatrix_core::math::{whites, Mat3, Vec3};
 use lutmatrix_core::spaces::curves::LogCurve;
@@ -263,7 +263,7 @@ fn chart_dctl_compiles_and_matches() {
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone);
         assert_eq!(src.contains("p_HlClip"), protect);
-        assert!(src.contains(&format!("DCTLUI_CHECK_BOX, {})", u8::from(wb))));
+        assert!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))));
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
         let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}", std::process::id()));
@@ -331,6 +331,29 @@ fn clip_level_is_measured_from_the_still() {
     let img = di_still(UPSIDE_DOWN, cam(), 0.5);
     let a = analyze(&img, None, &ChartSettings::default()).unwrap();
     assert_eq!(a.highlights.source, ClipSource::Brightest);
+}
+
+#[test]
+fn corrected_preview_differs_and_opendrt_display_works() {
+    // A strong cast: the corrected preview's chart is far from the uncorrected one.
+    let tint = dwg_to_xyz() * Mat3::from_diagonal(&Vec3::new(0.45, 0.85, 1.1)) * xyz_to_dwg();
+    let img = di_still(UPSIDE_DOWN, tint * cam(), 0.5);
+    let a = analyze(&img, None, &ChartSettings::default()).unwrap();
+    let fit = a.fit.as_ref().unwrap();
+    let corr = PreviewCorrection { fit, highlights: &a.highlights, white_balance: true };
+    let decode = |jpg: &[u8]| ::image::load_from_memory(jpg).unwrap().to_rgb8();
+    for display in [PreviewDisplay::Simple, PreviewDisplay::OpenDrt { look: 0, tonescale: 0 }] {
+        let (b, w, h) = preview_jpeg_with(&img, &a.space, fit.exposure_ratio, None, display, 400);
+        let (c, w2, h2) = preview_jpeg_with(&img, &a.space, fit.exposure_ratio, Some(corr), display, 400);
+        assert_eq!((w, h), (w2, h2));
+        let (b, c) = (decode(&b), decode(&c));
+        // Mean red/blue balance over the image: the cast is cyan, corrected is warmer.
+        let rb = |im: &::image::RgbImage| {
+            let (r, bl) = im.pixels().fold((0.0, 0.0), |(r, bl), p| (r + p[0] as f64, bl + p[2] as f64));
+            r / bl.max(1.0)
+        };
+        assert!(rb(&c) > rb(&b) * 1.15, "{display:?}: {} vs {}", rb(&c), rb(&b));
+    }
 }
 
 #[test]

@@ -44,12 +44,13 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "// footage from the same camera, decoded the same way as the chart still, in a");
     let _ = writeln!(w, "// DWG/DI timeline, before the output transform.");
     let _ = writeln!(w, "// Pipeline: DI -> linear DWG -> {}{}white balance (gains in linear DWG,", if hl.enabled { "highlight protection -> " } else { "" }, if fit.tone.is_some() { "per-channel tone curve -> " } else { "" });
-    let _ = writeln!(w, "// 'White Balance' on/off) -> XYZ (DWG_TO_XYZ) -> M_XYZ -> blended with the input");
-    let _ = writeln!(w, "// by 'Amount' -> linear DWG (XYZ_TO_DWG) -> DI.");
+    let _ = writeln!(w, "// skipped when 'WB Done In Raw' is ticked) -> XYZ (DWG_TO_XYZ) -> M_XYZ -> blended");
+    let _ = writeln!(w, "// with the input by 'Amount' -> linear DWG (XYZ_TO_DWG) -> DI.");
     let _ = writeln!(w, "//");
     let [gr, _, gb] = fit.wb_gains;
-    let _ = writeln!(w, "// White balance: R x{gr:.4}, G x1, B x{gb:.4} make the chart's gray neutral. Turn it");
-    let _ = writeln!(w, "// off for footage white-balanced in the raw decode (only the matrix runs then).");
+    let _ = writeln!(w, "// White balance: R x{gr:.4}, G x1, B x{gb:.4} make the chart's gray neutral. Tick");
+    let _ = writeln!(w, "// 'WB Done In Raw' for footage white-balanced in the raw decode (only the matrix");
+    let _ = writeln!(w, "// runs then). Unticked (also what Resolve gives a new checkbox) = the full correction.");
     if hl.enabled {
         let src = match hl.source {
             ClipSource::Set => "set by hand".to_string(),
@@ -60,7 +61,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
         let _ = writeln!(w, "//");
         let _ = writeln!(w, "// Highlight protection: each channel within 'Highlight Softness' stops of");
         let _ = writeln!(w, "// 'Highlight Clip DI' is raised towards the camera's white (the chart's gray with");
-        let _ = writeln!(w, "// the white balance on, equal RGB with it off), so clipped areas come out white");
+        let _ = writeln!(w, "// the white balance on, equal RGB with 'WB Done In Raw'), so clipped areas come out white");
         let _ = writeln!(w, "// instead of the colour the correction would give them.");
         let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&src));
     }
@@ -71,7 +72,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "// ============================================================================");
     let _ = writeln!(w);
     let _ = writeln!(w, "DEFINE_UI_PARAMS(p_Amount, Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)");
-    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_WB, White Balance, DCTLUI_CHECK_BOX, {})", u8::from(white_balance));
+    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_RawWB, WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!white_balance));
     if hl.enabled {
         let f = |v: f64| format!("{v:.4}");
         let _ = writeln!(w, "DEFINE_UI_PARAMS(p_HlProtect, Highlight Protection, DCTLUI_SLIDER_FLOAT, {}, 0.0, 1.0, 0.01)", f(hl.strength));
@@ -174,7 +175,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let mut cur = "dwg";
     if hl.enabled {
         let _ = writeln!(w, "    // Highlight protection: clipped channels towards the camera's white");
-        let _ = writeln!(w, "    float3 cw = p_WB ? make_float3(CAM_WHITE_R, 1.0f, CAM_WHITE_B) : make_float3(1.0f, 1.0f, 1.0f);");
+        let _ = writeln!(w, "    float3 cw = p_RawWB ? make_float3(1.0f, 1.0f, 1.0f) : make_float3(CAM_WHITE_R, 1.0f, CAM_WHITE_B);");
         let _ = writeln!(w, "    float sc = _fmaxf(dwg.x / cw.x, _fmaxf(dwg.y / cw.y, dwg.z / cw.z));");
         let _ = writeln!(w, "    float3 src = make_float3(rebuild(dwg.x, sc * cw.x, p_HlProtect, p_HlClip, p_HlSoft),");
         let _ = writeln!(w, "                             rebuild(dwg.y, sc * cw.y, p_HlProtect, p_HlClip, p_HlSoft),");
@@ -191,8 +192,8 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     } else {
         let _ = writeln!(w, "    float3 bal = {cur};");
     }
-    let _ = writeln!(w, "    // White balance");
-    let _ = writeln!(w, "    if (p_WB) bal = make_float3(bal.x * WB_R, bal.y * WB_G, bal.z * WB_B);");
+    let _ = writeln!(w, "    // White balance (not for footage already balanced in the raw decode)");
+    let _ = writeln!(w, "    if (!p_RawWB) bal = make_float3(bal.x * WB_R, bal.y * WB_G, bal.z * WB_B);");
     let _ = writeln!(w, "    // The matrix");
     let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), mat_mul(DWG_TO_XYZ(), bal));");
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
