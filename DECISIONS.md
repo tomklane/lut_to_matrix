@@ -588,9 +588,14 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   target gray's balance, then the matrix that is left (`m_xyz_after_wb`; the DCTL's
   `M_XYZ`). Gains to the target gray rather than to exact equal RGB, so a look that keeps
   D65 neutral gets gains ≈ 1 (the chart's grays are slightly tinted). The DCTL has a
-  *White Balance* checkbox (default on, app setting): on = exactly the fitted correction;
-  off = the matrix only, for footage white-balanced in the raw decode, where highlights
-  are handled before the correction.
+  *WB Done In Raw* checkbox (default unticked; app setting *White balance*): unticked =
+  exactly the fitted correction; ticked = the matrix only, for footage white-balanced in
+  the raw decode, where highlights are handled before the correction.
+- 0.5.0 had the checkbox the other way round (*White Balance*, ticked = on). When a
+  DCTL is updated in a node, Resolve can bring in a new checkbox unticked, which
+  silently dropped the white balance (the user's cast came back with unchanged
+  settings). Since 0.5.1 every new control's "off" value is the old behaviour: unticked
+  WB Done In Raw, protection strength 0 or clip level 0 = no protection.
 - **Preserve neutrals** (fit setting, default off): the matrix after the white balance
   keeps equal R, G, B equal (DWG rows sum to one gain g, 7 parameters, like an RGB mixer
   whose rows sum to 1; the tone model shares one power and black). It replaces the
@@ -620,3 +625,21 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Rust (`chart::highlights::Highlights::apply`, `ChartFit::apply_wb`) and the DCTL use the
   same formulas; the DCTL test compiles it as C and C++ and compares (protection, the
   preserving fit, both models, white balance on and off).
+
+## D43 — Before / after preview (user request 2026-10-30)
+- The chart view shows the still before, after, or split (a draggable line). *After*
+  runs `Highlights::apply` (the DCTL's formulas, `Amount` = 1, the white balance as the
+  DCTL will start) on the still's own decoded values, so highlight protection sees the
+  real clip level; before and after are both shown at the target's exposure (after is
+  already there with *Exposure: match*; *keep* and before are scaled by 1/exposure
+  ratio).
+- Display: plain Rec.709 with the existing soft roll-off, or OpenDRT (DWG/DI in, the
+  look and tonescale chosen for the OpenDRT preset, Rec.1886 out), since the colourist
+  judges the correction through OpenDRT and a clipped highlight's colour only shows up
+  there.
+- *Other Still…* previews another still decoded with the chart still's encoding and
+  corrected with its fit, no chart needed, to check footage the chart still doesn't
+  show (the sun). Patch outlines are only drawn on the chart still's Before view.
+- Rendering is multi-threaded, at most 1600 px across; the corrected image is fetched
+  only when the view shows it, again after every change to the analysis.
+

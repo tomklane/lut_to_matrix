@@ -27,14 +27,51 @@
   ];
   let svg = $state<SVGSVGElement | null>(null);
 
-  const imgW = $derived(a?.image.width ?? app.still?.info.width ?? 1);
-  const imgH = $derived(a?.image.height ?? app.still?.info.height ?? 1);
+  // The still on screen: the chart still, or another still to look at the correction on.
+  const comparing = $derived(!!app.compareStill);
+  const subjectPath = $derived(app.compareStill?.path ?? app.still?.path ?? "");
+  const imgW = $derived(app.compareStill?.info.width ?? a?.image.width ?? app.still?.info.width ?? 1);
+  const imgH = $derived(app.compareStill?.info.height ?? a?.image.height ?? app.still?.info.height ?? 1);
+  const after = $derived(app.chartAfter);
+  // Patch outlines only on the chart still as it is.
+  const overlay = $derived(!comparing && app.chartView === "before");
+
+  /* ---------- before / after ---------- */
+
+  let split = $state(0.5);
+  let dragging = false;
+  function splitAt(e: PointerEvent) {
+    const p = toImage(e);
+    if (p) split = Math.min(1, Math.max(0, p[0] / imgW));
+  }
+  function onPointerDown(e: PointerEvent) {
+    if (placing || app.chartView !== "split" || e.button !== 0) return;
+    // No native drag of the image (it would land in the window's file drop).
+    e.preventDefault();
+    dragging = true;
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    splitAt(e);
+  }
+  function onPointerMove(e: PointerEvent) {
+    if (dragging) splitAt(e);
+  }
+  function onPointerUp() {
+    dragging = false;
+  }
+  async function chooseCompare() {
+    const p = await openFile([IMAGE_FILTER], app.lastDir || undefined);
+    if (p) await app.openCompareStill(p);
+  }
+  function endCompare() {
+    app.compareStill = null;
+    app.chartAfter = null;
+  }
 
   // Wheel zoom (around the pointer); null = the automatic framing.
   let custom = $state<[number, number, number, number] | null>(null);
   let customFor = "";
   $effect(() => {
-    const p = app.still?.path ?? "";
+    const p = subjectPath;
     if (p !== customFor) {
       customFor = p;
       custom = null;
@@ -42,7 +79,7 @@
   });
 
   const autoBox = $derived.by((): [number, number, number, number] => {
-    if (!a || !zoomChart) return [0, 0, imgW, imgH];
+    if (!a || !zoomChart || comparing) return [0, 0, imgW, imgH];
     const pts = a.patches.flatMap((p) => p.sample_box);
     const xs = pts.map((p) => p[0]);
     const ys = pts.map((p) => p[1]);
@@ -300,19 +337,40 @@
               {/if}
             </span>
             <span class="grow"></span>
-            {#if a}<button class="btn plain" onclick={() => { zoomChart = !(zoomChart && !custom); custom = null; }}>{zoomChart && !custom ? "Whole image" : "Zoom to chart"}</button>{/if}
+            {#if a && !comparing}<button class="btn plain" onclick={() => { zoomChart = !(zoomChart && !custom); custom = null; }}>{zoomChart && !custom ? "Whole image" : "Zoom to chart"}</button>{/if}
+            {#if comparing && custom}<button class="btn plain" onclick={() => (custom = null)}>Whole image</button>{/if}
             {#if app.chart.corners}
               <button class="btn" onclick={useDetection}>Use detection</button>
             {/if}
-            <button class="btn" onclick={startPlacing}>Place by hand…</button>
+            {#if !comparing}<button class="btn" onclick={startPlacing}>Place by hand…</button>{/if}
+            <button class="btn" onclick={chooseCompare} disabled={!f} title="See the correction on another still from this camera (no chart needed)">Other Still…</button>
           {/if}
         </div>
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <svg bind:this={svg} viewBox={viewBox} preserveAspectRatio="xMidYMid meet" onclick={onViewerClick} class:stale={app.chartAnalyzing}>
-          {#if pv}
+        <div class="stage">
+        <svg
+          bind:this={svg}
+          viewBox={viewBox}
+          preserveAspectRatio="xMidYMid meet"
+          onclick={onViewerClick}
+          onpointerdown={onPointerDown}
+          onpointermove={onPointerMove}
+          onpointerup={onPointerUp}
+          class:stale={app.chartAnalyzing}
+          class:splitting={app.chartView === "split" && !placing}
+        >
+          {#if pv && !(app.chartView === "after" && after)}
             <image href={pv.data_url} x="0" y="0" width={imgW} height={imgH} />
           {/if}
-          {#if a && !placing}
+          {#if after && app.chartView === "after"}
+            <image href={after.data_url} x="0" y="0" width={imgW} height={imgH} />
+          {/if}
+          {#if after && app.chartView === "split"}
+            <clipPath id="after-clip"><rect x={split * imgW} y="0" width={imgW * (1 - split)} height={imgH} /></clipPath>
+            <image href={after.data_url} x="0" y="0" width={imgW} height={imgH} clip-path="url(#after-clip)" />
+            <line class="divider" x1={split * imgW} y1="0" x2={split * imgW} y2={imgH} />
+          {/if}
+          {#if a && !placing && overlay}
             {#each a.patches as p (p.index)}
               {@const st = patchState(p)}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -337,10 +395,40 @@
             {/each}
           {/if}
         </svg>
-        <div class="legend small muted">
-          <span><i class="sw used"></i>used</span>
-          <span><i class="sw clipped"></i>clipped / out of order</span>
-          <span><i class="sw excluded"></i>left out</span>
+        {#if app.chartView === "split" && after && !placing}
+          <span class="tag left">Before</span><span class="tag right">After</span>
+        {:else if app.chartView === "after" && after && !placing}
+          <span class="tag right">After</span>
+        {/if}
+        </div>
+        <div class="vfoot small">
+          {#if overlay}
+            <div class="legend muted">
+              <span><i class="sw used"></i>used</span>
+              <span><i class="sw clipped"></i>clipped / out of order</span>
+              <span><i class="sw excluded"></i>left out</span>
+            </div>
+          {:else if comparing}
+            <span class="muted name" title={app.compareStill?.path}>{app.compareStill?.file_name}</span>
+            <button class="btn plain" onclick={endCompare} title="Back to the chart still">Chart still</button>
+          {:else}
+            <span class="muted">{app.chartView === "split" ? "Drag to move the split" : "The correction as the DCTL applies it"}</span>
+          {/if}
+          <span class="grow"></span>
+          <Segmented
+            bind:value={app.chartView}
+            label="View"
+            disabled={!f}
+            options={[
+              { value: "before", label: "Before" },
+              { value: "after", label: "After", title: "With the correction, as the exported DCTL applies it" },
+              { value: "split", label: "Split" },
+            ]}
+          />
+          <select bind:value={app.chartDisplay} aria-label="Preview display" title="How the previews are shown">
+            <option value="simple">Rec.709</option>
+            <option value="opendrt">OpenDRT ({cat?.looks[app.odrtChart.look] ?? "look"})</option>
+          </select>
         </div>
       </div>
 
@@ -550,7 +638,7 @@
             <div class="row">
               <div class="label">
                 White balance<div class="sub">
-                  Gains in linear DWG before the matrix, for a camera gray of {fmt(f.gray_dwg[0], 2)} : 1 : {fmt(f.gray_dwg[2], 2)}. A checkbox in the DCTL: off for footage white-balanced in the raw decode
+                  Gains in linear DWG before the matrix, for a camera gray of {fmt(f.gray_dwg[0], 2)} : 1 : {fmt(f.gray_dwg[2], 2)}. In the DCTL, tick “WB Done In Raw” for footage white-balanced in the raw decode; off here starts it ticked
                 </div>
               </div>
               <div class="value">
@@ -830,7 +918,49 @@
   .legend {
     display: flex;
     gap: 14px;
-    padding: 7px 10px;
+  }
+  .vfoot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    min-height: 40px;
+    flex-wrap: wrap;
+  }
+  .stage {
+    position: relative;
+  }
+  .tag {
+    position: absolute;
+    top: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    background: rgb(0 0 0 / 0.55);
+    padding: 2px 7px;
+    border-radius: 4px;
+    pointer-events: none;
+  }
+  .tag.left {
+    left: 8px;
+  }
+  .tag.right {
+    right: 8px;
+  }
+  svg.splitting {
+    cursor: ew-resize;
+    user-select: none;
+    touch-action: none;
+  }
+  svg image {
+    -webkit-user-drag: none;
+    user-select: none;
+  }
+  .divider {
+    stroke: #fff;
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
   }
   .legend .sw {
     display: inline-block;

@@ -565,6 +565,8 @@ export interface ChartAnalysis {
   white_balance: boolean;
   notes: string[];
 }
+/** How previews are shown: simple Rec.709, or through OpenDRT (look and tonescale). */
+export type PreviewDisplay = { kind: "simple" } | { kind: "open_drt"; look: number; tonescale: number };
 export interface ChartPreview {
   data_url: string;
   width: number;
@@ -662,8 +664,8 @@ export const api = {
   chartLoad: (path: string) => invoke<LoadedStill>("chart_load", { path }),
   chartAnalyze: (req: { path: string; settings: ChartSettings; target: { path: string; space: StillSpace | null } | null }) =>
     invoke<ChartAnalysis>("chart_analyze", { req }),
-  chartPreview: (path: string, space: StillSpace, exposureRatio: number) =>
-    invoke<ChartPreview>("chart_preview", { path, space, exposureRatio }),
+  chartPreview: (path: string, space: StillSpace, exposureRatio: number, corrected = false, display: PreviewDisplay = { kind: "simple" }) =>
+    invoke<ChartPreview>("chart_preview", { path, space, exposureRatio, corrected, display }),
   chartDefaultDctlName: (path: string) => invoke<string>("chart_default_dctl_name", { path }),
   chartExportDctl: (dctlPath: string) => invoke<string>("chart_export_dctl", { dctlPath }),
   chartMatrixText: () => invoke<string>("chart_matrix_text"),

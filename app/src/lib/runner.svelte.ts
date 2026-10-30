@@ -1,7 +1,7 @@
 // Re-runs the matrix analysis whenever the LUT, its spaces, the settings or the
 // "fit through" reference change (debounced; stale results are dropped).
 
-import { api } from "./api";
+import { api, type PreviewDisplay } from "./api";
 import { app } from "./state.svelte";
 
 let seq = 0;
@@ -41,10 +41,13 @@ export function analysisEffect() {
   });
 }
 
-// Re-runs the chart analysis when the still, its settings or the target change, and
-// fetches a new preview when the encoding or exposure it is shown with changes.
+// Re-runs the chart analysis when the still, its settings or the target change.
+// chartPreviewEffect fetches the before / after previews.
 let chartSeq = 0;
 let previewKey = "";
+let afterKey = "";
+let afterFor: unknown = null;
+let previewSeq = 0;
 
 export function chartEffect() {
   $effect(() => {
@@ -64,13 +67,6 @@ export function chartEffect() {
         if (my !== chartSeq) return;
         app.chartAnalysis = a;
         app.chartError = null;
-        const ratio = a.fit?.exposure_ratio ?? 1;
-        const key = `${still.path}|${JSON.stringify(a.space)}|${Math.round(Math.log2(ratio) * 4)}`;
-        if (key !== previewKey) {
-          previewKey = key;
-          const p = await api.chartPreview(still.path, a.space, ratio);
-          if (my === chartSeq) app.chartPreview = p;
-        }
       } catch (e) {
         if (my === chartSeq) {
           app.chartError = String(e);
@@ -82,6 +78,48 @@ export function chartEffect() {
         if (my === chartSeq) app.chartAnalyzing = false;
       }
     }, 150);
+    return () => clearTimeout(t);
+  });
+}
+
+/** The display previews are shown on. */
+function previewDisplay(): PreviewDisplay {
+  return app.chartDisplay === "opendrt" ? { kind: "open_drt", look: app.odrtChart.look, tonescale: app.odrtChart.tonescale } : { kind: "simple" };
+}
+
+// Before: the still on screen (the chart still, or the comparison still) decoded with the
+// chart still's encoding, at the target's exposure. After: the same with the correction,
+// fetched when the view shows it and the analysis (or anything shown) changed.
+export function chartPreviewEffect() {
+  $effect(() => {
+    const a = app.chartAnalysis;
+    const still = app.still;
+    const subject = app.compareStill ?? still;
+    const view = app.chartView;
+    const display = previewDisplay();
+    if (!a || !subject) return;
+    const my = ++previewSeq;
+    const ratio = a.fit?.exposure_ratio ?? 1;
+    const base = `${subject.path}|${JSON.stringify(a.space)}|${Math.round(Math.log2(ratio) * 4)}|${JSON.stringify(display)}`;
+    const t = setTimeout(async () => {
+      try {
+        if (base !== previewKey) {
+          const p = await api.chartPreview(subject.path, a.space, ratio, false, display);
+          if (my !== previewSeq) return;
+          previewKey = base;
+          app.chartPreview = p;
+        }
+        if (view !== "before" && a.fit && (base !== afterKey || afterFor !== a)) {
+          const p = await api.chartPreview(subject.path, a.space, ratio, true, display);
+          if (my !== previewSeq) return;
+          afterKey = base;
+          afterFor = a;
+          app.chartAfter = p;
+        }
+      } catch (e) {
+        if (my === previewSeq) app.notify(String(e), "error");
+      }
+    }, 120);
     return () => clearTimeout(t);
   });
 }

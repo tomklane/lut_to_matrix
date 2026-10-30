@@ -13,11 +13,12 @@
   import UpdateBanner from "./views/UpdateBanner.svelte";
   import { updates } from "./lib/updates.svelte";
 
-  import { analysisEffect, chartEffect } from "./lib/runner.svelte";
+  import { analysisEffect, chartEffect, chartPreviewEffect } from "./lib/runner.svelte";
 
   let ready = $state(false);
   analysisEffect();
   chartEffect();
+  chartPreviewEffect();
   const mac = $derived(app.info?.os === "macos");
 
   const views: { id: View; label: string; icon: string }[] = [
