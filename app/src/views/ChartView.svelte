@@ -439,7 +439,7 @@
               <div><div class="muted small">Before</div><b class="num">{fmt(f.mean_before, 1)}</b></div>
               <Icon name="chevron" size={18} />
               <div><div class="muted small">After</div><b class="num accent">{fmt(f.mean_after, 1)}</b></div>
-              <div class="unit muted small">mean ΔE2000<br />{f.used} of 24 patches</div>
+              <div class="unit muted small">mean ΔE2000<br />{f.used} of 24 patches{#if f.tps}<br />matrix alone {fmt(f.mean_matrix, 1)}{/if}</div>
             </div>
             <div class="small muted num">
               max {fmt(f.max_after, 1)} · neutrals {fmt(f.neutral_after, 1)} · still {f.exposure_ratio >= 1 ? "+" : ""}{fmt(Math.log2(f.exposure_ratio), 2)} stops from the target
@@ -604,6 +604,34 @@
             </div>
             <div class="value"><Toggle bind:checked={app.chart.fit.lock_neutral} label="Lock neutral" disabled={app.chart.fit.preserve_neutrals} /></div>
           </div>
+          <div class="row">
+            <div class="label">
+              Spline (TPS)<div class="sub">A thin-plate spline after the matrix bends colours so each patch moves towards its target; grays and white stay put</div>
+            </div>
+            <div class="value"><Toggle bind:checked={app.chart.fit.tps} label="Spline" /></div>
+          </div>
+          {#if app.chart.fit.tps}
+            <div class="row">
+              <div class="label">
+                Spline smoothing<div class="sub">
+                  Exact goes through every patch, noise included.{#if f?.tps_check != null}
+                    {" "}Cross-check {fmt(f.tps_check, 1)} ΔE vs matrix {fmt(f.mean_matrix, 1)}: each patch as predicted without it{/if}
+                </div>
+              </div>
+              <div class="value">
+                <Segmented
+                  bind:value={app.chart.fit.tps_smoothing}
+                  label="Spline smoothing"
+                  options={[
+                    { value: 0, label: "Exact" },
+                    { value: 0.005, label: "Light" },
+                    { value: 0.02, label: "Normal" },
+                    { value: 0.1, label: "Strong" },
+                  ]}
+                />
+              </div>
+            </div>
+          {/if}
           <div class="row">
             <div class="label">Restraint<div class="sub">Closer to a plain white balance: less noise where a channel was barely recorded</div></div>
             <div class="value">

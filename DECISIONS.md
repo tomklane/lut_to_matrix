@@ -643,3 +643,29 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Rendering is multi-threaded, at most 1600 px across; the corrected image is fetched
   only when the view shows it, again after every change to the analysis.
 
+## D44 — Thin-plate spline after the matrix (user request 2026-10-31, "TPS3D")
+- Optional (fit setting *Spline (TPS)*, default off), after the matrix and white balance,
+  so it refines rather than replaces: the matrix carries the global map (and what
+  happens far from the chart), the spline only the remaining, local error.
+- Space: DaVinci Intermediate–encoded DWG (log-like, so the bending is about evenly
+  visible from shadows to highlights; the DCTL already has the curve). Kernel: the 3D
+  biharmonic φ(r) = r with an affine part, fitted to the residual target − matrix
+  output; the side conditions (Σw = 0, Σw·c = 0) make the kernel sum level off far from
+  the chart. φ(r) = r is conditionally negative definite, so smoothing enters as −λ/w on
+  the diagonal (a sign error there made large λ diverge).
+- Neutral anchors: zero residual at black and at 2–32 × the chart's white on the neutral
+  axis (weight 50), so grays, clipped white and very bright neutrals stay as the matrix
+  makes them; highlight protection still works.
+- Smoothing presets: Exact 0, Light 0.005, Normal 0.02 (default), Strong 0.1 (DI units).
+  Patch weights: neutrals 2 × (the fit's neutral weight).
+- Honesty check: leave-one-out, each used patch predicted by a spline fitted without it,
+  reported next to the matrix's mean; a note says so when the spline doesn't predict
+  better. On the underwater chart (6.5 ΔE after the matrix) the spline reaches 1.4 on the
+  chart at Normal but 6.85 in the cross-check: the leftover errors there are
+  patch-specific (spectral), not smooth, so the spline mostly fits the chart itself. On
+  a smooth camera difference (test: a saturation-dependent bend) it removes most of
+  the error and the cross-check improves.
+- DCTL: the points as `__CONSTANT__` arrays, the sum in `transform()` (constant arrays are
+  read directly there), a *TPS Off* checkbox (unticked = on, so a control Resolve adds
+  unticked keeps the correction, D42).
+

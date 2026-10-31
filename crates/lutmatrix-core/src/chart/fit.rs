@@ -29,7 +29,10 @@ use serde::{Deserialize, Serialize};
 use crate::difference::{delta_e_2000, xyz_to_lab};
 use crate::fit::{least_squares, least_squares_constrained, refine, Param};
 use crate::math::{whites, Mat3, Vec3};
+use crate::spaces::curves::di_encode;
 use crate::spaces::davinci;
+
+use super::tps::{fit_tps, neutral_anchors, Tps, TpsPoint};
 
 /// What happens to the chart's exposure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -71,7 +74,14 @@ pub struct FitSettings {
     /// sum to 1: clipped white stays white. Replaces `lock_neutral` (both can't hold for
     /// a camera whose gray isn't neutral).
     pub preserve_neutrals: bool,
+    /// A thin-plate spline after the matrix (D44): moves each patch towards its target.
+    pub tps: bool,
+    /// The spline's smoothing λ: 0 = through every patch exactly, larger = smoother.
+    pub tps_smoothing: f64,
 }
+
+/// Default for [`FitSettings::tps_smoothing`].
+pub const DEFAULT_TPS_SMOOTHING: f64 = 0.02;
 
 impl Default for FitSettings {
     fn default() -> Self {
@@ -82,6 +92,8 @@ impl Default for FitSettings {
             neutral_weight: 2.0,
             restraint: 0.0,
             preserve_neutrals: false,
+            tps: false,
+            tps_smoothing: DEFAULT_TPS_SMOOTHING,
         }
     }
 }
@@ -167,6 +179,14 @@ pub struct ChartFit {
     /// The same in linear DWG.
     #[serde(serialize_with = "crate::math::ser::mat")]
     pub m_dwg_after_wb: Mat3,
+    /// The spline after the matrix, if fitted.
+    pub tps: Option<Tps>,
+    /// Mean ΔE2000 of the used patches without the spline (the matrix alone).
+    pub mean_matrix: f64,
+    /// With the spline: mean ΔE2000 when each patch is predicted by a spline fitted
+    /// without it (an honest estimate for colours between the patches), and the same
+    /// for the matrix alone, which is the same as `mean_matrix`.
+    pub tps_check: Option<f64>,
     pub notes: Vec<String>,
 }
 
@@ -177,7 +197,14 @@ impl ChartFit {
             Some(t) => davinci::dwg_to_xyz() * t.apply(&(davinci::xyz_to_dwg() * xyz)),
             None => *xyz,
         };
-        self.m_xyz * x
+        self.spline(self.m_xyz * x)
+    }
+
+    fn spline(&self, xyz: Vec3) -> Vec3 {
+        match &self.tps {
+            Some(t) => t.apply_xyz(&xyz),
+            None => xyz,
+        }
     }
 
     /// [`ChartFit::apply`] with the white balance step on or off (off: the matrix after
@@ -190,7 +217,7 @@ impl ChartFit {
             Some(t) => davinci::dwg_to_xyz() * t.apply(&(davinci::xyz_to_dwg() * xyz)),
             None => *xyz,
         };
-        self.m_xyz_after_wb * x
+        self.spline(self.m_xyz_after_wb * x)
     }
 }
 
@@ -453,6 +480,9 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         wb_gains,
         m_xyz_after_wb: m_after,
         m_dwg_after_wb: davinci::xyz_to_dwg() * m_after * davinci::dwg_to_xyz(),
+        tps: None,
+        mean_matrix: 0.0,
+        tps_check: None,
         tone,
         exposure_ratio: ratio,
         neutral_gain: 0.0,
@@ -466,16 +496,53 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         gray_dwg,
         notes,
     };
-    let de_after: Vec<f64> = (0..patches.len())
-        .map(|i| delta_e_2000(&lab(&fit.apply(&patches[i].xyz), &wn), &lab(&target[i], &wn)))
-        .collect();
     let mean = |v: &[f64], idx: &[usize]| idx.iter().map(|&i| v[i]).sum::<f64>() / idx.len().max(1) as f64;
+    let de = |f: &ChartFit, i: usize| delta_e_2000(&lab(&f.apply(&patches[i].xyz), &wn), &lab(&target[i], &wn));
+    let mut fit = fit;
+    fit.mean_matrix = used.iter().map(|&i| de(&fit, i)).sum::<f64>() / used.len() as f64;
+    if s.tps {
+        // Where the matrix puts each used patch and where it should go, in DI DWG; plus
+        // neutral anchors up to far above the chart's white.
+        let enc = |x: &Vec3| (davinci::xyz_to_dwg() * x).map(di_encode);
+        let pts: Vec<(usize, TpsPoint)> = used
+            .iter()
+            .map(|&i| (i, TpsPoint { from: enc(&fit.apply(&patches[i].xyz)), to: enc(&target[i]), weight: weight(i) }))
+            .collect();
+        let white = target[18].y.max(target[19].y);
+        let anchors = neutral_anchors(white);
+        let all: Vec<TpsPoint> = pts.iter().map(|p| p.1).chain(anchors.iter().copied()).collect();
+        match fit_tps(&all, s.tps_smoothing) {
+            Some(t) => {
+                // Leave one out: each patch predicted by a spline that never saw it.
+                let mut loo = 0.0;
+                for (j, (i, _)) in pts.iter().enumerate() {
+                    let rest: Vec<TpsPoint> =
+                        pts.iter().enumerate().filter(|(k, _)| *k != j).map(|(_, p)| p.1).chain(anchors.iter().copied()).collect();
+                    let mut f2 = fit.clone();
+                    f2.tps = fit_tps(&rest, s.tps_smoothing);
+                    loo += de(&f2, *i);
+                }
+                fit.tps = Some(t);
+                fit.tps_check = Some(loo / pts.len() as f64);
+            }
+            None => fit.notes.push("the spline could not be fitted (the patches don't span colour space): matrix only".into()),
+        }
+    }
+    let de_after: Vec<f64> = (0..patches.len()).map(|i| de(&fit, i)).collect();
+    if let Some(c) = fit.tps_check {
+        if c >= fit.mean_matrix - 0.1 {
+            fit.notes.push(format!(
+                "the spline doesn't predict colours it wasn't fitted to better than the matrix (cross-check {c:.1} vs {:.1} ΔE2000): \
+                 smooth it more or leave it off",
+                fit.mean_matrix
+            ));
+        }
+    }
     let g = {
         let idx = if mids.len() >= 2 { &mids } else { &neutrals };
         let w: Vec3 = idx.iter().map(|&i| patches[i].xyz).sum();
         fit.apply(&w).y / w.y
     };
-    let mut fit = fit;
     fit.mean_before = mean(&fit.de_before, &used);
     fit.mean_after = mean(&de_after, &used);
     fit.max_after = used.iter().map(|&i| de_after[i]).fold(0.0, f64::max);
@@ -739,6 +806,30 @@ mod tests {
         let off = Highlights { enabled: false, ..hl };
         let px = Vec3::repeat(lc);
         assert!((off.apply(&f, &px, true) - f.apply(&(davinci::dwg_to_xyz() * px))).abs().max() < 1e-12);
+    }
+
+    #[test]
+    fn spline_takes_up_a_smooth_non_linear_error() {
+        // A camera whose saturated colours bend smoothly (in DI): no matrix undoes it.
+        let bend = |t: &Vec3| -> Vec3 {
+            let d = (davinci::xyz_to_dwg() * t).map(di_encode);
+            let c = d - Vec3::repeat((d.x + d.y + d.z) / 3.0);
+            let e = d + Vec3::new(0.6 * c.y * c.z, -0.5 * c.x * c.z, 0.4 * c.x * c.y) * 10.0 + c * (0.8 * c.norm());
+            davinci::dwg_to_xyz() * e.map(crate::spaces::curves::di_decode)
+        };
+        let p = patches(|t| bend(&(cam() * t)));
+        let m = fit_chart(&p, &FitSettings::default()).unwrap();
+        let s = fit_chart(&p, &FitSettings { tps: true, ..Default::default() }).unwrap();
+        assert!(m.tps.is_none() && s.tps.is_some());
+        assert!((s.mean_matrix - m.mean_after).abs() < 1e-9);
+        assert!(s.mean_after < 0.4 * m.mean_after, "{} vs {}", s.mean_after, m.mean_after);
+        let c = s.tps_check.unwrap();
+        assert!(c < m.mean_after, "cross-check {c} vs matrix {}", m.mean_after);
+        // Neutrals beyond the chart stay neutral (anchors).
+        let w = davinci::dwg_to_xyz() * Vec3::repeat(4.0);
+        let o = davinci::xyz_to_dwg() * s.apply_wb(&w, false);
+        let mo = davinci::xyz_to_dwg() * m.apply_wb(&w, false);
+        assert!((o - mo).norm() < 0.03 * mo.norm(), "{o} vs {mo}");
     }
 
     #[test]

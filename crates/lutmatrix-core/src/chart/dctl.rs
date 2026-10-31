@@ -51,6 +51,12 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "// White balance: R x{gr:.4}, G x1, B x{gb:.4} make the chart's gray neutral. Tick");
     let _ = writeln!(w, "// 'WB Done In Raw' for footage white-balanced in the raw decode (only the matrix");
     let _ = writeln!(w, "// runs then). Unticked (also what Resolve gives a new checkbox) = the full correction.");
+    if let Some(t) = &fit.tps {
+        let _ = writeln!(w, "//");
+        let _ = writeln!(w, "// Thin-plate spline after the matrix ({} points incl. neutral anchors, smoothing {:.4}),", t.centres.len(), t.smoothing);
+        let _ = writeln!(w, "// in DaVinci Intermediate DWG: moves each chart patch towards its target. Tick");
+        let _ = writeln!(w, "// 'TPS Off' to compare with the matrix alone.");
+    }
     if hl.enabled {
         let src = match hl.source {
             ClipSource::Set => "set by hand".to_string(),
@@ -73,6 +79,9 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w);
     let _ = writeln!(w, "DEFINE_UI_PARAMS(p_Amount, Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)");
     let _ = writeln!(w, "DEFINE_UI_PARAMS(p_RawWB, WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!white_balance));
+    if fit.tps.is_some() {
+        let _ = writeln!(w, "DEFINE_UI_PARAMS(p_TpsOff, TPS Off, DCTLUI_CHECK_BOX, 0)");
+    }
     if hl.enabled {
         let f = |v: f64| format!("{v:.4}");
         let _ = writeln!(w, "DEFINE_UI_PARAMS(p_HlProtect, Highlight Protection, DCTLUI_SLIDER_FLOAT, {}, 0.0, 1.0, 0.01)", f(hl.strength));
@@ -148,6 +157,18 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
         let _ = writeln!(w, "}}");
         let _ = writeln!(w);
     }
+    if let Some(t) = &fit.tps {
+        let n = t.centres.len();
+        let _ = writeln!(w, "// Thin-plate spline: residual(d) = A[k][0] + A[k][1..3] . d + sum_i W[i][k] * |d - C[i]|,");
+        let _ = writeln!(w, "// d = DaVinci Intermediate DWG after the matrix.");
+        let _ = writeln!(w, "#define TPS_N {n}");
+        let flat = |v: &[[f64; 3]]| v.iter().flat_map(|p| p.iter().map(|x| lit(*x))).collect::<Vec<_>>().join(", ");
+        let _ = writeln!(w, "__CONSTANT__ float TPS_C[{}] = {{{}}};", 3 * n, flat(&t.centres));
+        let _ = writeln!(w, "__CONSTANT__ float TPS_W[{}] = {{{}}};", 3 * n, flat(&t.weights));
+        let aff: Vec<String> = t.affine.iter().flat_map(|r| r.iter().map(|x| lit(*x))).collect();
+        let _ = writeln!(w, "__CONSTANT__ float TPS_A[12] = {{{}}};", aff.join(", "));
+        let _ = writeln!(w);
+    }
     if let Some(t) = &fit.tone {
         let _ = writeln!(w, "// Tone curve per channel in linear DWG: 0.18 * ((x - black) / 0.18)^power,");
         let _ = writeln!(w, "// continued below TONE_TOE by its tangent line (monotonic, finite for x < 0).");
@@ -196,6 +217,24 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "    if (!p_RawWB) bal = make_float3(bal.x * WB_R, bal.y * WB_G, bal.z * WB_B);");
     let _ = writeln!(w, "    // The matrix");
     let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), mat_mul(DWG_TO_XYZ(), bal));");
+    if fit.tps.is_some() {
+        let _ = writeln!(w, "    // Thin-plate spline (in DaVinci Intermediate DWG)");
+        let _ = writeln!(w, "    if (!p_TpsOff) {{");
+        let _ = writeln!(w, "        float3 sd = mat_mul(XYZ_TO_DWG(), fit);");
+        let _ = writeln!(w, "        float3 d = make_float3(linear_to_di(sd.x), linear_to_di(sd.y), linear_to_di(sd.z));");
+        let _ = writeln!(w, "        float rx = TPS_A[0] + TPS_A[1] * d.x + TPS_A[2] * d.y + TPS_A[3] * d.z;");
+        let _ = writeln!(w, "        float ry = TPS_A[4] + TPS_A[5] * d.x + TPS_A[6] * d.y + TPS_A[7] * d.z;");
+        let _ = writeln!(w, "        float rz = TPS_A[8] + TPS_A[9] * d.x + TPS_A[10] * d.y + TPS_A[11] * d.z;");
+        let _ = writeln!(w, "        for (int i = 0; i < TPS_N; i++) {{");
+        let _ = writeln!(w, "            float dx = d.x - TPS_C[3 * i], dy = d.y - TPS_C[3 * i + 1], dz = d.z - TPS_C[3 * i + 2];");
+        let _ = writeln!(w, "            float r = _sqrtf(dx * dx + dy * dy + dz * dz);");
+        let _ = writeln!(w, "            rx += TPS_W[3 * i] * r;");
+        let _ = writeln!(w, "            ry += TPS_W[3 * i + 1] * r;");
+        let _ = writeln!(w, "            rz += TPS_W[3 * i + 2] * r;");
+        let _ = writeln!(w, "        }}");
+        let _ = writeln!(w, "        fit = mat_mul(DWG_TO_XYZ(), make_float3(di_to_linear(d.x + rx), di_to_linear(d.y + ry), di_to_linear(d.z + rz)));");
+        let _ = writeln!(w, "    }}");
+    }
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    xyz = make_float3(xyz.x + (fit.x - xyz.x) * p_Amount,");
     let _ = writeln!(w, "                      xyz.y + (fit.y - xyz.y) * p_Amount,");
