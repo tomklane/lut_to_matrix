@@ -36,7 +36,7 @@ pub struct ChartArgs {
     /// after2014 or before2014.
     #[arg(long, default_value = "after2014")]
     edition: String,
-    /// matrix, tone (matrix + per-channel tone curve) or tps (TPS3D spline, no matrix).
+    /// matrix, tone (matrix + per-channel tone curve) tps (TPS3D, colour only, no matrix) or matrix-tps (matrix, then TPS3D).
     #[arg(long, default_value = "matrix")]
     model: String,
     /// match (correct the exposure too) or keep.
@@ -179,6 +179,7 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
         "matrix" => Model::Matrix,
         "tone" => Model::MatrixTone,
         "tps" | "tps3d" => Model::Tps,
+        "matrix-tps" => Model::MatrixTps,
         m => return Err(format!("unknown model '{m}'")),
     };
     s.fit.exposure = match args.exposure.as_str() {

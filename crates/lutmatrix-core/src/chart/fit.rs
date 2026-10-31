@@ -52,8 +52,18 @@ pub enum Model {
     #[default]
     Matrix,
     MatrixTone,
-    /// TPS3D: a thin-plate spline from the camera's chart to the target, no matrix (D44).
+    /// TPS3D: a gray balance curve and a thin-plate spline, no matrix, colour only (D44,
+    /// D45).
     Tps,
+    /// The 3×3 matrix, then TPS3D (colour only) on what it leaves (D45).
+    MatrixTps,
+}
+
+impl Model {
+    /// Ends in a TPS3D stage.
+    pub fn has_tps(self) -> bool {
+        matches!(self, Model::Tps | Model::MatrixTps)
+    }
 }
 
 /// Which colour patches the TPS3D spline is fitted to (the grays always are).
@@ -250,6 +260,8 @@ fn mid_neutrals(p: &[FitPatch]) -> Vec<usize> {
 
 /// Fit `patches` (24, chart order). Needs at least 6 used patches with 2 neutrals.
 pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, String> {
+    // TPS3D alone changes colour only: the still's exposure is kept.
+    let s = &FitSettings { exposure: if s.model == Model::Tps { Exposure::Keep } else { s.exposure }, ..*s };
     let used: Vec<usize> = (0..patches.len()).filter(|&i| patches[i].used).collect();
     let mids = mid_neutrals(patches);
     if used.len() < 6 {
@@ -401,7 +413,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
             .map(|q| bounded_lm(&q, &lo, &hi, &resid, 300))
             .min_by(|a, b| cost(a).total_cmp(&cost(b)))
             .expect("at least one seed");
-        if s.model == Model::Matrix {
+        if s.model != Model::MatrixTone {
             return (to_xyz(&best) * g0, None);
         }
         // Tone model: from the matrix (a power of 1 and no black are the identity), so it
@@ -423,7 +435,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         (Some(r), _) => r,
         // TPS3D: no matrix, no white balance; the spline comes below.
         (None, Model::Tps) => (Mat3::identity(), None),
-        (None, Model::Matrix) => {
+        (None, Model::Matrix | Model::MatrixTps) => {
             let m0 = ls(None).ok_or("the measured patches don't span three colour dimensions")?;
             let m_wb = wb(None);
             let res = |m: &Mat3| {
@@ -521,13 +533,16 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     let de = |f: &ChartFit, i: usize| delta_e_2000(&lab(&f.apply(&patches[i].xyz), &wn), &lab(&target[i], &wn));
     let mut fit = fit;
     fit.mean_matrix = used.iter().map(|&i| de(&fit, i)).sum::<f64>() / used.len() as f64;
-    if s.model == Model::Tps {
-        // Camera → target in DI DWG, no matrix: a per-channel curve through the grays,
-        // then the spline through the colour patches (all, or the six primaries) and the
-        // grays, plus the identity anchors (tps.rs).
+    if s.model.has_tps() {
+        // In DI DWG, after the matrix (identity for TPS3D alone): a gray balance curve, then
+        // the spline through the colour patches (all, or the six primaries) and the grays,
+        // plus the identity anchors (tps.rs). Colour only: each target is moved to its
+        // patch's own level, so neither stage changes brightness.
         let enc = |x: &Vec3| (davinci::xyz_to_dwg() * x).map(di_encode);
-        let pairs: Vec<(Vec3, Vec3)> = neutrals.iter().map(|&i| (enc(&patches[i].xyz), enc(&target[i]))).collect();
-        let curve = GrayCurve::fit(&pairs).ok_or("TPS3D needs at least 2 usable grays that get brighter in every channel")?;
+        let src: Vec<Vec3> = (0..patches.len()).map(|i| enc(&fit.apply(&patches[i].xyz))).collect();
+        let grays: Vec<Vec3> = neutrals.iter().map(|&i| src[i]).collect();
+        let curve = GrayCurve::balance(&grays).ok_or("TPS3D needs at least 2 usable grays that get brighter in every channel")?;
+        let level = |v: &Vec3| (v.x + v.y + v.z) / 3.0;
         let colour = |i: usize| match s.tps_patches {
             TpsPatches::All => i < 18,
             TpsPatches::Primaries => PRIMARIES.contains(&i),
@@ -536,7 +551,18 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
             .iter()
             .copied()
             .filter(|&i| colour(i) || patches[i].neutral)
-            .map(|i| (i, TpsPoint { from: curve.apply(&enc(&patches[i].xyz)), to: enc(&target[i]), weight: weight(i) }))
+            .map(|i| {
+                let from = curve.apply(&src[i]);
+                // Grays: identity (the curve already put them on the neutral axis, where the
+                // gray correction keeps them), as TPS3D Fast merges its neutrals.
+                let to = if patches[i].neutral {
+                    from
+                } else {
+                    let t = enc(&target[i]);
+                    t + Vec3::repeat(level(&from) - level(&t))
+                };
+                (i, TpsPoint { from, to, weight: weight(i) })
+            })
             .collect();
         // Synthetic neutrals at every patch's level (after the curve), grays included.
         let levels: Vec<Vec3> = pts.iter().map(|p| p.1.from).collect();
@@ -560,6 +586,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         }
         // For comparison: the matrix on the same chart, and its own leave-one-out.
         let ms = FitSettings { model: Model::Matrix, ..*s };
+        // (For Matrix + TPS3D, the matrix is the one before the spline: same numbers.)
         let mm = fit_chart(patches, &ms)?;
         fit.mean_matrix = mm.mean_after;
         let mut loo = (0.0, 0usize);
@@ -611,7 +638,8 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
             match s.model {
                 Model::Matrix => "3×3 matrix",
                 Model::MatrixTone => "matrix and tone curve",
-                Model::Tps => "spline through these patches",
+                Model::Tps => "colour-only spline through these patches",
+                Model::MatrixTps => "matrix and spline",
             }
         ));
     }
@@ -856,42 +884,72 @@ mod tests {
         assert!((off.apply(&f, &px, true) - f.apply(&(davinci::dwg_to_xyz() * px))).abs().max() < 1e-12);
     }
 
+    /// A camera whose saturated colours bend smoothly (in DI): no matrix undoes it.
+    fn bent(t: &Vec3) -> Vec3 {
+        let d = (davinci::xyz_to_dwg() * (cam() * t)).map(di_encode);
+        let c = d - Vec3::repeat((d.x + d.y + d.z) / 3.0);
+        let e = d + Vec3::new(0.6 * c.y * c.z, -0.5 * c.x * c.z, 0.4 * c.x * c.y) * 10.0 + c * (0.8 * c.norm());
+        davinci::dwg_to_xyz() * e.map(crate::spaces::curves::di_decode)
+    }
+
     #[test]
-    fn tps3d_takes_up_a_smooth_non_linear_error_without_a_matrix() {
-        // A camera whose saturated colours bend smoothly (in DI): no matrix undoes it.
-        let bend = |t: &Vec3| -> Vec3 {
-            let d = (davinci::xyz_to_dwg() * t).map(di_encode);
-            let c = d - Vec3::repeat((d.x + d.y + d.z) / 3.0);
-            let e = d + Vec3::new(0.6 * c.y * c.z, -0.5 * c.x * c.z, 0.4 * c.x * c.y) * 10.0 + c * (0.8 * c.norm());
-            davinci::dwg_to_xyz() * e.map(crate::spaces::curves::di_decode)
-        };
-        let p = patches(|t| bend(&(cam() * t)));
-        let m = fit_chart(&p, &FitSettings::default()).unwrap();
+    fn tps3d_changes_colour_only() {
+        let p = patches(bent);
         let s = fit_chart(&p, &FitSettings { model: Model::Tps, ..Default::default() }).unwrap();
-        assert!(m.tps.is_none() && s.tps.is_some());
-        // No matrix, no white balance.
+        let t = s.tps.as_ref().unwrap();
+        // No matrix, no white balance, exposure kept.
         assert_eq!(s.m_xyz, Mat3::identity());
         assert_eq!(s.wb_gains, [1.0; 3]);
-        assert!((s.mean_matrix - m.mean_after).abs() < 1e-9);
-        // Exact through the patches (smoothing 0), and better than the matrix in between.
-        assert!(s.mean_after < 0.05, "{}", s.mean_after);
-        let c = s.tps_check.unwrap();
-        assert!(c < m.mean_after, "cross-check {c} vs matrix {}", m.mean_after);
-        // The gray curve takes the grays to their targets; the spline then leaves the
-        // neutral axis alone (gray correction), so they stay there.
-        let t = s.tps.as_ref().unwrap();
+        assert_eq!(s.settings.exposure, Exposure::Keep);
         assert!(t.curve.is_some());
-        for i in 18..24 {
-            assert!(s.de_after[i] < 0.05, "gray {i}: {}", s.de_after[i]);
+        // Every pixel keeps its level (mean of its DI channels), anywhere.
+        let level = |v: &Vec3| (v.x + v.y + v.z) / 3.0;
+        for k in 0..200 {
+            let f = k as f64;
+            let d = Vec3::new((f * 0.137).fract() * 0.9 - 0.05, (f * 0.291).fract() * 0.9 - 0.05, (f * 0.533).fract() * 0.9 - 0.05);
+            let o = t.apply_di(&d);
+            assert!((level(&o) - level(&d)).abs() < 1e-9, "{d}: {o}");
+        }
+        // The patches get the target's colour (chroma in DI) at their own level, the grays
+        // become neutral, and the spline leaves the neutral axis alone.
+        let enc = |x: &Vec3| (davinci::xyz_to_dwg() * x).map(di_encode);
+        for (i, q) in p.iter().enumerate() {
+            let o = enc(&s.apply(&q.xyz));
+            let t = enc(&(q.target * s.exposure_ratio));
+            let chroma = |v: &Vec3| v - Vec3::repeat(level(v));
+            let want = if q.neutral { Vec3::zeros() } else { chroma(&t) };
+            assert!((chroma(&o) - want).norm() < 1e-6, "{i}: {o} vs {t}");
+            assert!((level(&o) - level(&enc(&q.xyz))).abs() < 1e-9);
         }
         for l in [0.05, 0.4, 0.9] {
             let d = Vec3::repeat(l);
             assert!((t.spline_di(&d) - d).norm() < 1e-12);
         }
-        // Six primaries: still exact on those, the grays and the axis.
+        assert!(s.tps_check.is_some() && s.matrix_check.is_some());
+        // Six primaries: still exact (in colour) on those.
         let q = fit_chart(&p, &FitSettings { model: Model::Tps, tps_patches: TpsPatches::Primaries, ..Default::default() }).unwrap();
-        for i in PRIMARIES {
-            assert!(q.de_after[i] < 0.05, "{i}: {}", q.de_after[i]);
+        let o = enc(&q.apply(&p[14].xyz));
+        let t = enc(&(p[14].target * q.exposure_ratio));
+        assert!(((o - Vec3::repeat(level(&o))) - (t - Vec3::repeat(level(&t)))).norm() < 1e-6);
+    }
+
+    #[test]
+    fn matrix_then_tps3d() {
+        let p = patches(bent);
+        let m = fit_chart(&p, &FitSettings::default()).unwrap();
+        let s = fit_chart(&p, &FitSettings { model: Model::MatrixTps, ..Default::default() }).unwrap();
+        assert!(s.tps.is_some() && m.tps.is_none());
+        // The same matrix as the matrix model, then the spline on what it leaves.
+        assert!((s.m_xyz - m.m_xyz).abs().max() < 1e-9);
+        assert!((s.mean_matrix - m.mean_after).abs() < 1e-9);
+        assert!(s.mean_after < 0.6 * m.mean_after, "{} vs {}", s.mean_after, m.mean_after);
+        // The spline keeps the level the matrix gave.
+        let enc = |x: &Vec3| (davinci::xyz_to_dwg() * x).map(di_encode);
+        let level = |v: &Vec3| (v.x + v.y + v.z) / 3.0;
+        for q in &p {
+            let a = enc(&m.apply(&q.xyz));
+            let b = enc(&s.apply(&q.xyz));
+            assert!((level(&a) - level(&b)).abs() < 1e-9);
         }
     }
 

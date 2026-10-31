@@ -435,7 +435,7 @@ export interface LoadedStill {
   found: number;
 }
 export interface ChartFitSettings {
-  model: "matrix" | "matrix_tone" | "tps";
+  model: "matrix" | "matrix_tone" | "tps" | "matrix_tps";
   exposure: "match" | "keep";
   lock_neutral: boolean;
   neutral_weight: number;

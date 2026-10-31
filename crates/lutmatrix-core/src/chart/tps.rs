@@ -1,12 +1,18 @@
-//! TPS3D: a per-channel tone curve through the grays, then a thin-plate spline, no
-//! matrix (DECISIONS.md D44). Built like the user's Python matrix app's "TPS3D Fast"
+//! TPS3D: a per-channel gray balance curve, then a thin-plate spline, colour only: no
+//! exposure or contrast change (DECISIONS.md D44, D45). Built like the user's Python matrix app's "TPS3D Fast"
 //! (`rbf_solver.py` / `mf-solve`), with the curve first (the order that predicted
 //! colours between the patches better and keeps clipped white white):
 //!
-//! - Tone curve: per channel, monotone cubic (Fritsch–Carlson) through the usable gray
-//!   patches, camera DI → target DI, continued linearly beyond the end grays. It does the
-//!   white balance, exposure and contrast of the grays, so they reach the neutral axis
-//!   before the spline.
+//! - Gray balance curve: per channel, monotone cubic (Fritsch–Carlson) through the usable
+//!   gray patches, each gray's channel → that gray's own level (mean of its DI channels),
+//!   continued linearly beyond the end grays, then shifted so every pixel keeps its level.
+//!   It takes the camera's grays to the neutral axis without changing exposure or
+//!   contrast.
+//! - Level: every pixel's mean DI value is kept exactly. The curve shifts back to it; the
+//!   spline is fitted to targets moved to each patch's own level, and as it solves the same
+//!   linear system for each channel, residuals that sum to zero at every control point sum
+//!   to zero everywhere. So TPS3D changes colour (the balance between the channels), never
+//!   brightness.
 //! - Space: DaVinci Intermediate–encoded DWG, in and out.
 //! - Kernel: the 3D biharmonic φ(r) = r with an affine part, per output channel
 //!   `f(d) = a0 + a·d + Σ w_i |d − c_i|`, stored here as the residual `f(d) − d`;
@@ -96,8 +102,16 @@ impl GrayCurve {
         (2.0 * t3 - 3.0 * t2 + 1.0) * y[i] + (t3 - 2.0 * t2 + t) * h * m[i] + (-2.0 * t3 + 3.0 * t2) * y[i + 1] + (t3 - t2) * h * m[i + 1]
     }
 
+    /// The curve per channel, shifted so the pixel keeps its level (mean of the channels).
     pub fn apply(&self, d: &Vec3) -> Vec3 {
-        Vec3::new(self.eval(0, d.x), self.eval(1, d.y), self.eval(2, d.z))
+        let c = Vec3::new(self.eval(0, d.x), self.eval(1, d.y), self.eval(2, d.z));
+        c + Vec3::repeat((d.x + d.y + d.z - c.x - c.y - c.z) / 3.0)
+    }
+
+    /// The balance curve for these grays (DI): each channel to the gray's own level.
+    pub fn balance(grays: &[Vec3]) -> Option<GrayCurve> {
+        let pairs: Vec<(Vec3, Vec3)> = grays.iter().map(|g| (*g, Vec3::repeat((g.x + g.y + g.z) / 3.0))).collect();
+        GrayCurve::fit(&pairs)
     }
 }
 
@@ -304,7 +318,19 @@ mod tests {
             .collect();
         let c = GrayCurve::fit(&pairs).unwrap();
         for (a, b) in &pairs {
-            assert!((c.apply(a) - b).norm() < 1e-12);
+            for k in 0..3 {
+                assert!((c.eval(k, a[k]) - b[k]).abs() < 1e-12);
+            }
+        }
+        // `apply` keeps the level; the balance curve takes grays to the neutral axis.
+        let x = Vec3::new(0.3, 0.42, 0.5);
+        let o = c.apply(&x);
+        assert!(((o.x + o.y + o.z) - (x.x + x.y + x.z)).abs() < 1e-12);
+        let grays: Vec<Vec3> = pairs.iter().map(|p| p.0).collect();
+        let b = GrayCurve::balance(&grays).unwrap();
+        for g in &grays {
+            let o = b.apply(g);
+            assert!((o.x - o.y).abs() < 1e-12 && (o.z - o.y).abs() < 1e-12, "{o}");
         }
         for k in 0..3 {
             let mut prev = f64::NEG_INFINITY;

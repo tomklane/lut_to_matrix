@@ -246,6 +246,8 @@ fn chart_dctl_compiles_and_matches() {
         (Model::Matrix, false, true, false, true),
         (Model::MatrixTone, true, false, false, false),
         (Model::Matrix, false, false, true, true),
+        (Model::MatrixTps, false, true, true, false),
+        (Model::MatrixTps, true, false, false, false),
     ];
     for (model, preserve, protect, wb, tps) in cases {
         let s = ChartSettings {
@@ -277,8 +279,8 @@ fn chart_dctl_compiles_and_matches() {
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone && !tps);
         assert_eq!(src.contains("M_XYZ"), !tps);
+        assert_eq!(src.contains("TPS_C["), tps || model == Model::MatrixTps);
         assert_eq!(src.contains("p_HlClip"), protect);
-        assert_eq!(src.contains("TPS_C["), tps);
         assert_eq!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))), !tps);
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
