@@ -435,15 +435,15 @@ export interface LoadedStill {
   found: number;
 }
 export interface ChartFitSettings {
-  model: "matrix" | "matrix_tone";
+  model: "matrix" | "matrix_tone" | "tps";
   exposure: "match" | "keep";
   lock_neutral: boolean;
   neutral_weight: number;
   restraint: number;
   /** Equal RGB stays equal (clipped white stays white); replaces the neutral lock. */
   preserve_neutrals: boolean;
-  /** A thin-plate spline after the matrix. */
-  tps: boolean;
+  /** TPS3D: the colour patches the spline goes through. */
+  tps_patches: "all" | "primaries";
   tps_smoothing: number;
 }
 export interface HighlightSettings {
@@ -485,8 +485,8 @@ export const defaultChartFit: ChartFitSettings = {
   neutral_weight: 2,
   restraint: 0,
   preserve_neutrals: false,
-  tps: false,
-  tps_smoothing: 0.02,
+  tps_patches: "all",
+  tps_smoothing: 0,
 };
 export interface PatchSample {
   mean: [number, number, number];
@@ -543,10 +543,11 @@ export interface ChartFit {
   m_xyz_after_wb: Mat3;
   m_dwg_after_wb: Mat3;
   tps: { centres: number[][]; weights: number[][]; affine: number[][]; smoothing: number } | null;
-  /** Mean ΔE2000 of the matrix alone. */
+  /** TPS3D: mean ΔE2000 of the 3×3 matrix model on the same chart. */
   mean_matrix: number;
-  /** With the spline: each patch predicted by a spline fitted without it. */
+  /** TPS3D: each patch predicted by a spline fitted without it; the same for the matrix. */
   tps_check: number | null;
+  matrix_check: number | null;
   notes: string[];
 }
 export interface ChartAnalysis {

@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 
 use super::fit::{ChartFit, TONE_TOE};
 use super::highlights::{ClipSource, Highlights, CLIP_DI_RANGE, SOFTNESS_RANGE};
+use super::tps::Tps;
 use crate::dctl::{c, lit, matrix_fn};
 use crate::spaces::curves::{DI_A, DI_B, DI_C, DI_LIN_CUT, DI_LOG_CUT, DI_M};
 use crate::spaces::davinci;
@@ -27,6 +28,9 @@ pub struct ChartMeta {
 }
 
 pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &ChartMeta) -> String {
+    if let Some(t) = &fit.tps {
+        return tps_dctl(t, fit.gray_dwg, hl, meta);
+    }
     let mut s = String::new();
     let w = &mut s;
     let _ = writeln!(w, "// ============================================================================");
@@ -51,12 +55,6 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "// White balance: R x{gr:.4}, G x1, B x{gb:.4} make the chart's gray neutral. Tick");
     let _ = writeln!(w, "// 'WB Done In Raw' for footage white-balanced in the raw decode (only the matrix");
     let _ = writeln!(w, "// runs then). Unticked (also what Resolve gives a new checkbox) = the full correction.");
-    if let Some(t) = &fit.tps {
-        let _ = writeln!(w, "//");
-        let _ = writeln!(w, "// Thin-plate spline after the matrix ({} points incl. neutral anchors, smoothing {:.4}),", t.centres.len(), t.smoothing);
-        let _ = writeln!(w, "// in DaVinci Intermediate DWG: moves each chart patch towards its target. Tick");
-        let _ = writeln!(w, "// 'TPS Off' to compare with the matrix alone.");
-    }
     if hl.enabled {
         let src = match hl.source {
             ClipSource::Set => "set by hand".to_string(),
@@ -79,9 +77,6 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w);
     let _ = writeln!(w, "DEFINE_UI_PARAMS(p_Amount, Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)");
     let _ = writeln!(w, "DEFINE_UI_PARAMS(p_RawWB, WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!white_balance));
-    if fit.tps.is_some() {
-        let _ = writeln!(w, "DEFINE_UI_PARAMS(p_TpsOff, TPS Off, DCTLUI_CHECK_BOX, 0)");
-    }
     if hl.enabled {
         let f = |v: f64| format!("{v:.4}");
         let _ = writeln!(w, "DEFINE_UI_PARAMS(p_HlProtect, Highlight Protection, DCTLUI_SLIDER_FLOAT, {}, 0.0, 1.0, 0.01)", f(hl.strength));
@@ -157,18 +152,6 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
         let _ = writeln!(w, "}}");
         let _ = writeln!(w);
     }
-    if let Some(t) = &fit.tps {
-        let n = t.centres.len();
-        let _ = writeln!(w, "// Thin-plate spline: residual(d) = A[k][0] + A[k][1..3] . d + sum_i W[i][k] * |d - C[i]|,");
-        let _ = writeln!(w, "// d = DaVinci Intermediate DWG after the matrix.");
-        let _ = writeln!(w, "#define TPS_N {n}");
-        let flat = |v: &[[f64; 3]]| v.iter().flat_map(|p| p.iter().map(|x| lit(*x))).collect::<Vec<_>>().join(", ");
-        let _ = writeln!(w, "__CONSTANT__ float TPS_C[{}] = {{{}}};", 3 * n, flat(&t.centres));
-        let _ = writeln!(w, "__CONSTANT__ float TPS_W[{}] = {{{}}};", 3 * n, flat(&t.weights));
-        let aff: Vec<String> = t.affine.iter().flat_map(|r| r.iter().map(|x| lit(*x))).collect();
-        let _ = writeln!(w, "__CONSTANT__ float TPS_A[12] = {{{}}};", aff.join(", "));
-        let _ = writeln!(w);
-    }
     if let Some(t) = &fit.tone {
         let _ = writeln!(w, "// Tone curve per channel in linear DWG: 0.18 * ((x - black) / 0.18)^power,");
         let _ = writeln!(w, "// continued below TONE_TOE by its tangent line (monotonic, finite for x < 0).");
@@ -217,24 +200,6 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "    if (!p_RawWB) bal = make_float3(bal.x * WB_R, bal.y * WB_G, bal.z * WB_B);");
     let _ = writeln!(w, "    // The matrix");
     let _ = writeln!(w, "    float3 fit = mat_mul(M_XYZ(), mat_mul(DWG_TO_XYZ(), bal));");
-    if fit.tps.is_some() {
-        let _ = writeln!(w, "    // Thin-plate spline (in DaVinci Intermediate DWG)");
-        let _ = writeln!(w, "    if (!p_TpsOff) {{");
-        let _ = writeln!(w, "        float3 sd = mat_mul(XYZ_TO_DWG(), fit);");
-        let _ = writeln!(w, "        float3 d = make_float3(linear_to_di(sd.x), linear_to_di(sd.y), linear_to_di(sd.z));");
-        let _ = writeln!(w, "        float rx = TPS_A[0] + TPS_A[1] * d.x + TPS_A[2] * d.y + TPS_A[3] * d.z;");
-        let _ = writeln!(w, "        float ry = TPS_A[4] + TPS_A[5] * d.x + TPS_A[6] * d.y + TPS_A[7] * d.z;");
-        let _ = writeln!(w, "        float rz = TPS_A[8] + TPS_A[9] * d.x + TPS_A[10] * d.y + TPS_A[11] * d.z;");
-        let _ = writeln!(w, "        for (int i = 0; i < TPS_N; i++) {{");
-        let _ = writeln!(w, "            float dx = d.x - TPS_C[3 * i], dy = d.y - TPS_C[3 * i + 1], dz = d.z - TPS_C[3 * i + 2];");
-        let _ = writeln!(w, "            float r = _sqrtf(dx * dx + dy * dy + dz * dz);");
-        let _ = writeln!(w, "            rx += TPS_W[3 * i] * r;");
-        let _ = writeln!(w, "            ry += TPS_W[3 * i + 1] * r;");
-        let _ = writeln!(w, "            rz += TPS_W[3 * i + 2] * r;");
-        let _ = writeln!(w, "        }}");
-        let _ = writeln!(w, "        fit = mat_mul(DWG_TO_XYZ(), make_float3(di_to_linear(d.x + rx), di_to_linear(d.y + ry), di_to_linear(d.z + rz)));");
-        let _ = writeln!(w, "    }}");
-    }
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    xyz = make_float3(xyz.x + (fit.x - xyz.x) * p_Amount,");
     let _ = writeln!(w, "                      xyz.y + (fit.y - xyz.y) * p_Amount,");
@@ -243,6 +208,214 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "    // XYZ -> linear DWG -> DaVinci Intermediate");
     let _ = writeln!(w, "    dwg = mat_mul(XYZ_TO_DWG(), xyz);");
     let _ = writeln!(w, "    return make_float3(linear_to_di(dwg.x), linear_to_di(dwg.y), linear_to_di(dwg.z));");
+    let _ = writeln!(w, "}}");
+    debug_assert!(s.is_ascii());
+    s
+}
+
+fn header(w: &mut String, title: &str, meta: &ChartMeta) {
+    let _ = writeln!(w, "// ============================================================================");
+    let _ = writeln!(w, "// LUT Matrix - {title}");
+    let _ = writeln!(w, "// ----------------------------------------------------------------------------");
+    let _ = writeln!(w, "// Chart still:   {}", c(&meta.source_image));
+    let _ = writeln!(w, "// Still encoded: {}", c(&meta.image_space));
+    let _ = writeln!(w, "// Target:        {}", c(&meta.target));
+    let _ = writeln!(w, "// Model:         {}", c(&meta.model));
+    let _ = writeln!(w, "// Exposure:      {}", c(&meta.exposure));
+    let _ = writeln!(w, "// Fit error:     {}", c(&meta.fit_error));
+    let _ = writeln!(w, "// Generated by:  LUT Matrix {} on {} (UTC)", c(&meta.version), c(&meta.date));
+    let _ = writeln!(w, "// ----------------------------------------------------------------------------");
+    let _ = writeln!(w, "// Input and output: DaVinci Wide Gamut / DaVinci Intermediate. Apply it to");
+    let _ = writeln!(w, "// footage from the same camera, decoded the same way as the chart still, in a");
+    let _ = writeln!(w, "// DWG/DI timeline, before the output transform.");
+}
+
+fn di_functions(w: &mut String) {
+    let _ = writeln!(w, "// DaVinci Intermediate (Blackmagic, DWG Intermediate v1.1).");
+    for (k, v) in [("DI_A", DI_A), ("DI_B", DI_B), ("DI_C", DI_C), ("DI_M", DI_M), ("DI_LIN_CUT", DI_LIN_CUT), ("DI_LOG_CUT", DI_LOG_CUT)] {
+        let _ = writeln!(w, "#define {k:<11} {}", lit(v));
+    }
+    let _ = writeln!(w);
+    let _ = writeln!(w, "__DEVICE__ float di_to_linear(float v)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    if (v <= DI_LOG_CUT) return v / DI_M;");
+    let _ = writeln!(w, "    return _powf(2.0f, v / DI_C - DI_B) - DI_A;");
+    let _ = writeln!(w, "}}");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "__DEVICE__ float linear_to_di(float l)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    if (l <= DI_LIN_CUT) return l * DI_M;");
+    let _ = writeln!(w, "    return (_log2f(l + DI_A) + DI_B) * DI_C;");
+    let _ = writeln!(w, "}}");
+    let _ = writeln!(w);
+}
+
+fn highlight_params(w: &mut String, hl: &Highlights) {
+    let f = |v: f64| format!("{v:.4}");
+    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_HlProtect, Highlight Protection, DCTLUI_SLIDER_FLOAT, {}, 0.0, 1.0, 0.01)", f(hl.strength));
+    let _ = writeln!(
+        w,
+        "DEFINE_UI_PARAMS(p_HlClip, Highlight Clip DI, DCTLUI_SLIDER_FLOAT, {}, {}, {}, 0.001)",
+        f(hl.clip_di),
+        f(CLIP_DI_RANGE.0),
+        f(CLIP_DI_RANGE.1)
+    );
+    let _ = writeln!(
+        w,
+        "DEFINE_UI_PARAMS(p_HlSoft, Highlight Softness, DCTLUI_SLIDER_FLOAT, {}, {}, {}, 0.05)",
+        f(hl.softness),
+        f(SOFTNESS_RANGE.0),
+        f(SOFTNESS_RANGE.1)
+    );
+}
+
+fn rebuild_fn(w: &mut String) {
+    let _ = writeln!(w, "// One channel (linear DWG) raised towards 'est' by its highlight weight: smoothstep");
+    let _ = writeln!(w, "// from 'soft' stops below the clip to the clip, times 'amount'.");
+    let _ = writeln!(w, "__DEVICE__ float rebuild(float v, float est, float amount, float clip_di, float soft)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    float lc = di_to_linear(clip_di);");
+    let _ = writeln!(w, "    if (est <= v || amount <= 0.0f || v <= 0.0f || lc <= 0.0f) return v;");
+    let _ = writeln!(w, "    float t = _log2f(v / lc) / _fmaxf(soft, 0.001f) + 1.0f;");
+    let _ = writeln!(w, "    t = _fminf(_fmaxf(t, 0.0f), 1.0f);");
+    let _ = writeln!(w, "    return v + t * t * (3.0f - 2.0f * t) * amount * (est - v);");
+    let _ = writeln!(w, "}}");
+    let _ = writeln!(w);
+}
+
+fn clip_source(hl: &Highlights) -> String {
+    match hl.source {
+        ClipSource::Set => "set by hand".to_string(),
+        ClipSource::Measured => "measured in the chart still".to_string(),
+        ClipSource::Brightest => "the chart still's brightest value (it doesn't clip): set it to where the footage clips".to_string(),
+        ClipSource::Default => "a typical value (the still says nothing): set it to where the footage clips".to_string(),
+    }
+}
+
+/// The TPS3D DCTL: the spline alone, no matrix (D44).
+fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> String {
+    let mut s = String::new();
+    let w = &mut s;
+    header(w, "chart correction (TPS3D: gray curve + thin-plate spline, no matrix)", meta);
+    let _ = writeln!(w, "// Pipeline: DI -> {}per-channel gray curve -> TPS3D with gray correction", if hl.enabled { "highlight protection (linear DWG) -> " } else { "" });
+    let _ = writeln!(w, "// (both in DaVinci Intermediate DWG) -> blended with the input by 'Amount' -> DI.");
+    let _ = writeln!(w, "//");
+    let _ = writeln!(w, "// Gray curve: per channel, a monotone cubic through the chart's grays (camera ->");
+    let _ = writeln!(w, "// target), linear beyond the end grays: white balance, exposure and contrast.");
+    let _ = writeln!(w, "// TPS3D: f(d) = A[k][0] + A[k][1..3] . d + sum_i W[i][k] * |d - C[i]| + d, kernel |r|");
+    let _ = writeln!(w, "// (3D thin plate), {} control points (chart patches, synthetic neutrals and the DI", t.centres.len());
+    let _ = writeln!(w, "// cube corners), smoothing {}. Gray correction: out = f(d) - (f(L,L,L) - (L,L,L)),", t.smoothing);
+    let _ = writeln!(w, "// L = (d.r + d.g + d.b) / 3, so equal R, G, B (clipped white too) pass unchanged.");
+    if hl.enabled {
+        let _ = writeln!(w, "//");
+        let _ = writeln!(w, "// Highlight protection: each channel within 'Highlight Softness' stops of");
+        let _ = writeln!(w, "// 'Highlight Clip DI' is raised towards the camera's white (the chart's gray), which");
+        let _ = writeln!(w, "// the gray curve makes neutral and the spline leaves alone: clipped areas go white.");
+        let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&clip_source(hl)));
+    }
+    let _ = writeln!(w, "//");
+    let _ = writeln!(w, "// The DaVinci Intermediate constants are from Blackmagic Design, \"DaVinci Wide");
+    let _ = writeln!(w, "// Gamut Intermediate\" v1.1 (2021-07-31).");
+    let _ = writeln!(w, "// ============================================================================");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_Amount, Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)");
+    if hl.enabled {
+        highlight_params(w, hl);
+    }
+    let _ = writeln!(w);
+    di_functions(w);
+    if hl.enabled {
+        let ok = gray.iter().all(|v| v.is_finite() && *v > 1e-6);
+        let _ = writeln!(w, "// The camera's white in linear DWG (the chart's mid gray, green = 1).");
+        let _ = writeln!(w, "#define CAM_WHITE_R {}", lit(if ok { gray[0] } else { 1.0 }));
+        let _ = writeln!(w, "#define CAM_WHITE_B {}", lit(if ok { gray[2] } else { 1.0 }));
+        let _ = writeln!(w);
+        rebuild_fn(w);
+    }
+    if let Some(c) = &t.curve {
+        let _ = writeln!(w, "// Cubic Hermite segment.");
+        let _ = writeln!(w, "__DEVICE__ float herm(float v, float x0, float x1, float y0, float y1, float m0, float m1)");
+        let _ = writeln!(w, "{{");
+        let _ = writeln!(w, "    float h = x1 - x0, t = (v - x0) / h, t2 = t * t, t3 = t2 * t;");
+        let _ = writeln!(w, "    return (2.0f * t3 - 3.0f * t2 + 1.0f) * y0 + (t3 - 2.0f * t2 + t) * h * m0 + (-2.0f * t3 + 3.0f * t2) * y1 + (t3 - t2) * h * m1;");
+        let _ = writeln!(w, "}}");
+        let _ = writeln!(w);
+        for (k, ch) in ["r", "g", "b"].iter().enumerate() {
+            let (x, y, m) = (&c.x[k], &c.y[k], &c.m[k]);
+            let n = x.len();
+            let _ = writeln!(w, "__DEVICE__ float gray_{ch}(float v)");
+            let _ = writeln!(w, "{{");
+            let _ = writeln!(w, "    if (v <= {}) return {} + {} * (v - {});", lit(x[0]), lit(y[0]), lit(m[0]), lit(x[0]));
+            let _ = writeln!(w, "    if (v >= {}) return {} + {} * (v - {});", lit(x[n - 1]), lit(y[n - 1]), lit(m[n - 1]), lit(x[n - 1]));
+            for i in 0..n - 1 {
+                let _ = writeln!(
+                    w,
+                    "    if (v < {}) return herm(v, {}, {}, {}, {}, {}, {});",
+                    lit(x[i + 1]),
+                    lit(x[i]),
+                    lit(x[i + 1]),
+                    lit(y[i]),
+                    lit(y[i + 1]),
+                    lit(m[i]),
+                    lit(m[i + 1])
+                );
+            }
+            let _ = writeln!(w, "    return {};", lit(y[n - 1]));
+            let _ = writeln!(w, "}}");
+            let _ = writeln!(w);
+        }
+    }
+    let n = t.centres.len();
+    let flat = |v: &[[f64; 3]]| v.iter().flat_map(|p| p.iter().map(|x| lit(*x))).collect::<Vec<_>>().join(", ");
+    let _ = writeln!(w, "#define TPS_N {n}");
+    let _ = writeln!(w, "__CONSTANT__ float TPS_C[{}] = {{{}}};", 3 * n, flat(&t.centres));
+    let _ = writeln!(w, "__CONSTANT__ float TPS_W[{}] = {{{}}};", 3 * n, flat(&t.weights));
+    let aff: Vec<String> = t.affine.iter().flat_map(|r| r.iter().map(|x| lit(*x))).collect();
+    let _ = writeln!(w, "__CONSTANT__ float TPS_A[12] = {{{}}};", aff.join(", "));
+    let _ = writeln!(w);
+    let _ = writeln!(w, "__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    float3 d = make_float3(p_R, p_G, p_B);");
+    if hl.enabled {
+        let _ = writeln!(w);
+        let _ = writeln!(w, "    // Highlight protection: clipped channels towards the camera's white (linear DWG)");
+        let _ = writeln!(w, "    float3 dwg = make_float3(di_to_linear(p_R), di_to_linear(p_G), di_to_linear(p_B));");
+        let _ = writeln!(w, "    float sc = _fmaxf(dwg.x / CAM_WHITE_R, _fmaxf(dwg.y, dwg.z / CAM_WHITE_B));");
+        let _ = writeln!(w, "    dwg = make_float3(rebuild(dwg.x, sc * CAM_WHITE_R, p_HlProtect, p_HlClip, p_HlSoft),");
+        let _ = writeln!(w, "                      rebuild(dwg.y, sc, p_HlProtect, p_HlClip, p_HlSoft),");
+        let _ = writeln!(w, "                      rebuild(dwg.z, sc * CAM_WHITE_B, p_HlProtect, p_HlClip, p_HlSoft));");
+        let _ = writeln!(w, "    d = make_float3(linear_to_di(dwg.x), linear_to_di(dwg.y), linear_to_di(dwg.z));");
+    }
+    if t.curve.is_some() {
+        let _ = writeln!(w);
+        let _ = writeln!(w, "    // Gray curve per channel");
+        let _ = writeln!(w, "    d = make_float3(gray_r(d.x), gray_g(d.y), gray_b(d.z));");
+    }
+    let _ = writeln!(w);
+    let _ = writeln!(w, "    // TPS3D residual at d and at the gray of the same level, L = mean(d)");
+    let _ = writeln!(w, "    float L = (d.x + d.y + d.z) / 3.0f;");
+    let _ = writeln!(w, "    float rx = TPS_A[1] * d.x + TPS_A[2] * d.y + TPS_A[3] * d.z;");
+    let _ = writeln!(w, "    float ry = TPS_A[5] * d.x + TPS_A[6] * d.y + TPS_A[7] * d.z;");
+    let _ = writeln!(w, "    float rz = TPS_A[9] * d.x + TPS_A[10] * d.y + TPS_A[11] * d.z;");
+    let _ = writeln!(w, "    float nx = (TPS_A[1] + TPS_A[2] + TPS_A[3]) * L;");
+    let _ = writeln!(w, "    float ny = (TPS_A[5] + TPS_A[6] + TPS_A[7]) * L;");
+    let _ = writeln!(w, "    float nz = (TPS_A[9] + TPS_A[10] + TPS_A[11]) * L;");
+    let _ = writeln!(w, "    for (int i = 0; i < TPS_N; i++) {{");
+    let _ = writeln!(w, "        float cx = TPS_C[3 * i], cy = TPS_C[3 * i + 1], cz = TPS_C[3 * i + 2];");
+    let _ = writeln!(w, "        float r = _sqrtf((d.x - cx) * (d.x - cx) + (d.y - cy) * (d.y - cy) + (d.z - cz) * (d.z - cz));");
+    let _ = writeln!(w, "        float q = _sqrtf((L - cx) * (L - cx) + (L - cy) * (L - cy) + (L - cz) * (L - cz));");
+    let _ = writeln!(w, "        rx += TPS_W[3 * i] * r;");
+    let _ = writeln!(w, "        ry += TPS_W[3 * i + 1] * r;");
+    let _ = writeln!(w, "        rz += TPS_W[3 * i + 2] * r;");
+    let _ = writeln!(w, "        nx += TPS_W[3 * i] * q;");
+    let _ = writeln!(w, "        ny += TPS_W[3 * i + 1] * q;");
+    let _ = writeln!(w, "        nz += TPS_W[3 * i + 2] * q;");
+    let _ = writeln!(w, "    }}");
+    let _ = writeln!(w, "    // Gray correction: f(d) - (f(L,L,L) - (L,L,L)); the constants cancel");
+    let _ = writeln!(w, "    float3 o = make_float3(d.x + rx - nx, d.y + ry - ny, d.z + rz - nz);");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
+    let _ = writeln!(w, "    return make_float3(p_R + (o.x - p_R) * p_Amount, p_G + (o.y - p_G) * p_Amount, p_B + (o.z - p_B) * p_Amount);");
     let _ = writeln!(w, "}}");
     debug_assert!(s.is_ascii());
     s

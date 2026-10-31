@@ -287,6 +287,7 @@
   const odrtScale = $derived(o ? Math.max(o.before.mean, o.after.mean) * 1.05 : 1);
   const odrtSmooth = $derived(o ? o.safety.roughness <= 1.5 * o.safety.stock_roughness : true);
   const unused = $derived(a ? a.patches.filter((p) => !p.used) : []);
+  const tps = $derived(app.chart.fit.model === "tps");
   // Equal R, G, B through the matrix (linear DWG), brightest channel = 1.
   function whiteThrough(m: number[][]): number[] | null {
     const w = m.map((r) => r[0] + r[1] + r[2]);
@@ -439,7 +440,7 @@
               <div><div class="muted small">Before</div><b class="num">{fmt(f.mean_before, 1)}</b></div>
               <Icon name="chevron" size={18} />
               <div><div class="muted small">After</div><b class="num accent">{fmt(f.mean_after, 1)}</b></div>
-              <div class="unit muted small">mean ΔE2000<br />{f.used} of 24 patches{#if f.tps}<br />matrix alone {fmt(f.mean_matrix, 1)}{/if}</div>
+              <div class="unit muted small">mean ΔE2000<br />{f.used} of 24 patches{#if f.tps}<br />3×3 matrix {fmt(f.mean_matrix, 1)}{/if}</div>
             </div>
             <div class="small muted num">
               max {fmt(f.max_after, 1)} · neutrals {fmt(f.neutral_after, 1)} · still {f.exposure_ratio >= 1 ? "+" : ""}{fmt(Math.log2(f.exposure_ratio), 2)} stops from the target
@@ -575,6 +576,7 @@
                 options={[
                   { value: "matrix", label: "Matrix", title: "One 3×3 matrix in linear XYZ" },
                   { value: "matrix_tone", label: "Matrix + tone", title: "A per-channel curve in linear DWG first: for footage whose grays don't follow the light" },
+                  { value: "tps", label: "TPS3D", title: "A gray curve and a thin-plate spline through the patches, no matrix (as TPS3D Fast)" },
                 ]}
               />
             </div>
@@ -592,6 +594,7 @@
               />
             </div>
           </div>
+          {#if !tps}
           <div class="row">
             <div class="label">
               Preserve neutrals<div class="sub">The matrix after the white balance keeps equal R, G, B equal: with the white balance off (footage balanced in the raw decode) clipped white stays white</div>
@@ -604,34 +607,6 @@
             </div>
             <div class="value"><Toggle bind:checked={app.chart.fit.lock_neutral} label="Lock neutral" disabled={app.chart.fit.preserve_neutrals} /></div>
           </div>
-          <div class="row">
-            <div class="label">
-              Spline (TPS)<div class="sub">A thin-plate spline after the matrix bends colours so each patch moves towards its target; grays and white stay put</div>
-            </div>
-            <div class="value"><Toggle bind:checked={app.chart.fit.tps} label="Spline" /></div>
-          </div>
-          {#if app.chart.fit.tps}
-            <div class="row">
-              <div class="label">
-                Spline smoothing<div class="sub">
-                  Exact goes through every patch, noise included.{#if f?.tps_check != null}
-                    {" "}Cross-check {fmt(f.tps_check, 1)} ΔE vs matrix {fmt(f.mean_matrix, 1)}: each patch as predicted without it{/if}
-                </div>
-              </div>
-              <div class="value">
-                <Segmented
-                  bind:value={app.chart.fit.tps_smoothing}
-                  label="Spline smoothing"
-                  options={[
-                    { value: 0, label: "Exact" },
-                    { value: 0.005, label: "Light" },
-                    { value: 0.02, label: "Normal" },
-                    { value: 0.1, label: "Strong" },
-                  ]}
-                />
-              </div>
-            </div>
-          {/if}
           <div class="row">
             <div class="label">Restraint<div class="sub">Closer to a plain white balance: less noise where a channel was barely recorded</div></div>
             <div class="value">
@@ -646,7 +621,46 @@
               />
             </div>
           </div>
-          {#if f}
+          {:else}
+          <div class="row">
+            <div class="label">Patches<div class="sub">Which colour patches the spline goes through (the grays always)</div></div>
+            <div class="value">
+              <Segmented
+                bind:value={app.chart.fit.tps_patches}
+                label="Patches"
+                options={[
+                  { value: "all", label: "All colours" },
+                  { value: "primaries", label: "6 primaries", title: "Red, yellow, green, cyan, blue, magenta: fewer points, a smoother spline" },
+                ]}
+              />
+            </div>
+          </div>
+          <div class="row">
+            <div class="label">Smoothing<div class="sub">Exact goes through every patch, noise included (as TPS3D Fast)</div></div>
+            <div class="value">
+              <Segmented
+                bind:value={app.chart.fit.tps_smoothing}
+                label="Smoothing"
+                options={[
+                  { value: 0, label: "Exact" },
+                  { value: 0.005, label: "Light" },
+                  { value: 0.02, label: "Normal" },
+                ]}
+              />
+            </div>
+          </div>
+          {#if f?.tps_check != null}
+            <div class="row">
+              <div class="label">
+                Cross-check<div class="sub">Each patch as predicted by a fit that never saw it, mean ΔE2000: how well colours between the patches are likely to come out</div>
+              </div>
+              <div class="value num small nowrap">
+                TPS3D <b class:warnc={f.matrix_check != null && f.tps_check >= f.matrix_check}>{fmt(f.tps_check, 1)}</b> · 3×3 matrix {fmt(f.matrix_check ?? NaN, 1)}
+              </div>
+            </div>
+          {/if}
+          {/if}
+          {#if f && !tps}
             <div class="row mat">
               <div class="label">Matrix<div class="sub">In linear DWG, after the {f.tone ? "tone curve and " : ""}white balance</div></div>
               <div class="value num">
