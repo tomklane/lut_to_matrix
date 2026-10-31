@@ -430,8 +430,9 @@ impl ChartAnalysis {
             model: match f.settings.model {
                 fit::Model::Matrix => "3x3 matrix in XYZ".to_string(),
                 fit::Model::MatrixTone => "per-channel tone curve in linear DWG + 3x3 matrix in XYZ".to_string(),
-                fit::Model::Tps => format!(
-                    "TPS3D thin-plate spline in DI DWG, no matrix ({} patches, smoothing {}), gray-corrected",
+                fit::Model::Tps | fit::Model::MatrixTps => format!(
+                    "{}TPS3D in DI DWG, colour only ({}, smoothing {}), gray-corrected",
+                    if f.settings.model == fit::Model::MatrixTps { "3x3 matrix in XYZ, then " } else { "no matrix: " },
                     match f.settings.tps_patches {
                         fit::TpsPatches::All => "colour patches and grays",
                         fit::TpsPatches::Primaries => "6 primaries and grays",

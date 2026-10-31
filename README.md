@@ -62,8 +62,9 @@ the matrix by default) that you can save to the library. If clipped highlights t
 colour (a red or magenta sun under water), turn on *Highlight protection* for the DCTL.
 Tick *WB Done In Raw* in the DCTL to turn the white balance part of the correction off
 for footage white-balanced in the raw decode; *Preserve neutrals* keeps the rest of the
-correction from tinting white. *TPS3D* replaces the matrix with a gray curve and a
-thin-plate spline; compare its cross-check with the matrix's before trusting it. Under the
+correction from tinting white. *TPS3D* replaces the matrix with a colour-only gray
+balance and thin-plate spline (exposure and contrast stay as shot); *Matrix + TPS3D* runs
+it after the matrix. Compare the cross-check with the matrix's before trusting either. Under the
 image, *Before / After / Split* shows the
 correction as the DCTL applies it (plain or through OpenDRT), and *Other Still…* shows
 it on another still from the same camera. Export stills as half-float
@@ -195,7 +196,8 @@ lutmatrix chart b_cam.tif --target a_cam.tif --dctl b_to_a.dctl   # match camera
 lutmatrix chart still.tif --opendrt --save "Chart Cam B"    # also fit an OpenDRT preset (after the matrix)
 lutmatrix chart still.tif --protect-highlights --dctl c.dctl # clipped areas go to white (clip measured, or --clip-di 0.68)
 lutmatrix chart still.tif --preserve-neutrals --dctl c.dctl  # matrix after the white balance keeps equal RGB equal
-lutmatrix chart still.tif --model tps --dctl c.dctl          # TPS3D: gray curve + thin-plate spline, no matrix
+lutmatrix chart still.tif --model tps --dctl c.dctl          # TPS3D: colour-only gray balance + thin-plate spline, no matrix
+lutmatrix chart still.tif --model matrix-tps --dctl c.dctl   # the matrix, then TPS3D (colour only)
 ```
 
 ### Batch: every negative × every print, plus full LUTs

@@ -6,6 +6,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-31
+
+### Added
+- **Matrix + TPS3D** chart model (DECISIONS D45): the 3×3 matrix, then TPS3D on what it
+  leaves. On the underwater chart it predicts colours between the patches better than
+  the matrix alone (cross-check 6.2 vs 7.3 ΔE2000). CLI: `--model matrix-tps`.
+
+### Changed
+- **TPS3D changes colour only** (D45): its gray curve now only balances the channels,
+  and the spline keeps every pixel's level, so exposure and contrast stay as shot (TPS3D
+  alone always keeps the still's exposure). Grays come out exactly neutral.
+
 ## [0.7.0] - 2026-10-31
 
 ### Added
@@ -246,7 +258,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...v0.5.0

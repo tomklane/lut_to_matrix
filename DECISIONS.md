@@ -674,3 +674,21 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - DCTL: the gray curve as per-channel Hermite segments with literals, the points as
   `__CONSTANT__` arrays read in `transform()`, one loop for f(d) and f(L,L,L); `Amount`
   blends in DI.
+
+## D45 — TPS3D colour only; Matrix + TPS3D (user request 2026-10-31)
+- "TPS3D should not affect contrast, only colour." The gray curve becomes a *balance*
+  curve: per channel through each gray's channel → that gray's own level (mean of its DI
+  channels), and its output is shifted back to the pixel's level. The spline's colour
+  targets are moved to each patch's own level (after the curve); the grays are identity
+  points (as TPS3D Fast merges its neutrals). The spline solves the same linear system
+  per channel, so residuals that sum to zero at every control point sum to zero
+  everywhere: the mean of a pixel's DI channels is kept exactly, through both stages. So
+  TPS3D alone keeps exposure and contrast (the fit forces *Exposure: keep*; the ΔE
+  numbers still include the chart's contrast, which TPS3D now leaves alone by design).
+  The grays come out exactly neutral (not the chart's slight tint).
+- *Matrix + TPS3D*: the matrix model as usual (white balance split, exposure, neutral
+  lock, restraint, preserve neutrals), then TPS3D colour-only on its output, in DI DWG.
+  The DCTL is the matrix DCTL with the TPS3D block after `M_XYZ`. Underwater chart,
+  leave-one-out: Matrix + TPS3D 6.2 ΔE vs matrix 7.3 (TPS3D alone 10.6); 9-patch still
+  12.7 vs 22.9.
+

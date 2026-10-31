@@ -288,6 +288,7 @@
   const odrtSmooth = $derived(o ? o.safety.roughness <= 1.5 * o.safety.stock_roughness : true);
   const unused = $derived(a ? a.patches.filter((p) => !p.used) : []);
   const tps = $derived(app.chart.fit.model === "tps");
+  const hasTps = $derived(app.chart.fit.model === "tps" || app.chart.fit.model === "matrix_tps");
   // Equal R, G, B through the matrix (linear DWG), brightest channel = 1.
   function whiteThrough(m: number[][]): number[] | null {
     const w = m.map((r) => r[0] + r[1] + r[2]);
@@ -576,15 +577,17 @@
                 options={[
                   { value: "matrix", label: "Matrix", title: "One 3×3 matrix in linear XYZ" },
                   { value: "matrix_tone", label: "Matrix + tone", title: "A per-channel curve in linear DWG first: for footage whose grays don't follow the light" },
-                  { value: "tps", label: "TPS3D", title: "A gray curve and a thin-plate spline through the patches, no matrix (as TPS3D Fast)" },
+                  { value: "tps", label: "TPS3D", title: "Colour only: a gray balance curve and a thin-plate spline through the patches, no matrix (as TPS3D Fast)" },
+                  { value: "matrix_tps", label: "Matrix + TPS3D", title: "The 3×3 matrix, then TPS3D (colour only) on what it leaves" },
                 ]}
               />
             </div>
           </div>
-          <div class="row">
-            <div class="label">Exposure</div>
+          <div class="row" class:off={tps}>
+            <div class="label">Exposure{#if tps}<div class="sub">TPS3D changes colour only: exposure and contrast stay as shot</div>{/if}</div>
             <div class="value">
               <Segmented
+                disabled={tps}
                 bind:value={app.chart.fit.exposure}
                 label="Exposure"
                 options={[
@@ -621,9 +624,10 @@
               />
             </div>
           </div>
-          {:else}
+          {/if}
+          {#if hasTps}
           <div class="row">
-            <div class="label">Patches<div class="sub">Which colour patches the spline goes through (the grays always)</div></div>
+            <div class="label">TPS3D patches<div class="sub">Which colour patches the spline goes through (the grays always). Colour only: brightness and contrast are kept</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.tps_patches}
@@ -636,7 +640,7 @@
             </div>
           </div>
           <div class="row">
-            <div class="label">Smoothing<div class="sub">Exact goes through every patch, noise included (as TPS3D Fast)</div></div>
+            <div class="label">TPS3D smoothing<div class="sub">Exact goes through every patch, noise included (as TPS3D Fast)</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.tps_smoothing}
@@ -655,7 +659,7 @@
                 Cross-check<div class="sub">Each patch as predicted by a fit that never saw it, mean ΔE2000: how well colours between the patches are likely to come out</div>
               </div>
               <div class="value num small nowrap">
-                TPS3D <b class:warnc={f.matrix_check != null && f.tps_check >= f.matrix_check}>{fmt(f.tps_check, 1)}</b> · 3×3 matrix {fmt(f.matrix_check ?? NaN, 1)}
+                {tps ? "TPS3D" : "Matrix + TPS3D"} <b class:warnc={f.matrix_check != null && f.tps_check >= f.matrix_check}>{fmt(f.tps_check, 1)}</b> · 3×3 matrix {fmt(f.matrix_check ?? NaN, 1)}
               </div>
             </div>
           {/if}
