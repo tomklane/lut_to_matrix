@@ -6,6 +6,17 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-31
+
+### Added
+- **Spline (TPS)** for chart corrections (DECISIONS D44): an optional thin-plate spline
+  after the matrix bends colours so each patch moves towards its target, with grays and
+  white held in place. Smoothing from *Exact* to *Strong*. The app shows a cross-check
+  (each patch predicted by a spline fitted without it) next to the matrix's error, so
+  you can see whether the spline helps colours between the patches or just fits the
+  chart. In the DCTL, with a *TPS Off* checkbox to compare. CLI: `--tps`,
+  `--tps-smoothing`.
+
 ## [0.6.0] - 2026-10-30
 
 ### Added
@@ -234,7 +245,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.3.0...v0.4.0

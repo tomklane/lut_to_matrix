@@ -442,6 +442,9 @@ export interface ChartFitSettings {
   restraint: number;
   /** Equal RGB stays equal (clipped white stays white); replaces the neutral lock. */
   preserve_neutrals: boolean;
+  /** A thin-plate spline after the matrix. */
+  tps: boolean;
+  tps_smoothing: number;
 }
 export interface HighlightSettings {
   enabled: boolean;
@@ -482,6 +485,8 @@ export const defaultChartFit: ChartFitSettings = {
   neutral_weight: 2,
   restraint: 0,
   preserve_neutrals: false,
+  tps: false,
+  tps_smoothing: 0.02,
 };
 export interface PatchSample {
   mean: [number, number, number];
@@ -537,6 +542,11 @@ export interface ChartFit {
   wb_gains: [number, number, number];
   m_xyz_after_wb: Mat3;
   m_dwg_after_wb: Mat3;
+  tps: { centres: number[][]; weights: number[][]; affine: number[][]; smoothing: number } | null;
+  /** Mean ΔE2000 of the matrix alone. */
+  mean_matrix: number;
+  /** With the spline: each patch predicted by a spline fitted without it. */
+  tps_check: number | null;
   notes: string[];
 }
 export interface ChartAnalysis {

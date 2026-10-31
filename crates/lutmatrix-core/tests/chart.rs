@@ -219,6 +219,8 @@ static float3 make_float3(float x, float y, float z) { float3 r; r.x = x; r.y = 
 #define _log2f log2f
 #define _fmaxf fmaxf
 #define _fminf fminf
+#define _sqrtf sqrtf
+#define __CONSTANT__ static const
 #define DEFINE_UI_PARAMS(name, label, kind, def, ...) static float name = def;
 "#;
 const MAIN: &str = r#"
@@ -235,18 +237,19 @@ int main(void) {
 #[test]
 fn chart_dctl_compiles_and_matches() {
     let img = di_still(UPSIDE_DOWN, cam(), 0.5);
-    // (model, preserve neutrals, highlight protection, white balance checkbox)
+    // (model, preserve neutrals, highlight protection, white balance checkbox, spline)
     let cases = [
-        (Model::Matrix, false, false, true),
-        (Model::MatrixTone, false, false, true),
-        (Model::Matrix, true, true, true),
-        (Model::MatrixTone, false, true, true),
-        (Model::Matrix, false, true, false),
-        (Model::MatrixTone, true, false, false),
+        (Model::Matrix, false, false, true, false),
+        (Model::MatrixTone, false, false, true, false),
+        (Model::Matrix, true, true, true, false),
+        (Model::MatrixTone, false, true, true, true),
+        (Model::Matrix, false, true, false, true),
+        (Model::MatrixTone, true, false, false, false),
+        (Model::Matrix, false, false, true, true),
     ];
-    for (model, preserve, protect, wb) in cases {
+    for (model, preserve, protect, wb, tps) in cases {
         let s = ChartSettings {
-            fit: lutmatrix_core::chart::fit::FitSettings { model, preserve_neutrals: preserve, ..Default::default() },
+            fit: lutmatrix_core::chart::fit::FitSettings { model, preserve_neutrals: preserve, tps, ..Default::default() },
             // A clip inside the tested codes (up to 0.7), so the protection is exercised.
             highlights: HighlightSettings { enabled: protect, clip_di: Some(0.55), softness: 1.5, strength: 0.9 },
             white_balance: wb,
@@ -258,15 +261,23 @@ fn chart_dctl_compiles_and_matches() {
             if f.tone.is_some() {
                 f.tone = Some(Tone { power: [1.2, 0.9, 1.05], black: [0.002, -0.001, 0.0] });
             }
+            // ... and a visible spline (the synthetic chart needs none).
+            if let Some(t) = f.tps.as_mut() {
+                for (i, w) in t.weights.iter_mut().enumerate() {
+                    *w = [0.02 * ((i % 5) as f64 - 2.0), 0.01 * ((i % 3) as f64 - 1.0), -0.015 * ((i % 4) as f64 - 1.5)];
+                }
+                t.affine[0][0] += 0.01;
+            }
         }
         let src = a.dctl("2026-01-01").unwrap();
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone);
         assert_eq!(src.contains("p_HlClip"), protect);
+        assert_eq!(src.contains("TPS_C["), tps);
         assert!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))));
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
-        let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}-{tps}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("c.dctl"), &src).unwrap();
         std::fs::write(dir.join("main.c"), format!("{SHIM}\n#include \"c.dctl\"\n{MAIN}")).unwrap();
@@ -300,7 +311,7 @@ fn chart_dctl_compiles_and_matches() {
                 let got: Vec<f64> = line.split_whitespace().map(|v| v.parse().unwrap()).collect();
                 let w = want(&c.map(|v| v as f32 as f64));
                 for k in 0..3 {
-                    assert!((got[k] - w[k]).abs() < 2e-5 * w[k].abs().max(1.0), "{cc} {model:?} {preserve} {protect} {wb} {c:?}: {got:?} vs {w:?}");
+                    assert!((got[k] - w[k]).abs() < 2e-5 * w[k].abs().max(1.0), "{cc} {model:?} {preserve} {protect} {wb} {tps} {c:?}: {got:?} vs {w:?}");
                 }
             }
         }

@@ -18,6 +18,7 @@ pub mod highlights;
 pub mod image;
 pub mod odrt;
 pub mod reference;
+pub mod tps;
 
 use serde::{Deserialize, Serialize};
 

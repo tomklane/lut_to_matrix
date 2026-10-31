@@ -52,6 +52,12 @@ pub struct ChartArgs {
     /// so the grays keep what is left of the camera's cast.
     #[arg(long)]
     preserve_neutrals: bool,
+    /// Add a thin-plate spline after the matrix (moves each patch towards its target).
+    #[arg(long)]
+    tps: bool,
+    /// The spline's smoothing (0 = exact through every patch).
+    #[arg(long, default_value_t = lutmatrix_core::chart::fit::DEFAULT_TPS_SMOOTHING)]
+    tps_smoothing: f64,
     /// Highlight protection in the DCTL: near the clip, clipped areas go to white.
     #[arg(long)]
     protect_highlights: bool,
@@ -182,6 +188,8 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     s.fit.lock_neutral = !args.no_lock_neutral;
     s.fit.restraint = args.restraint;
     s.fit.preserve_neutrals = args.preserve_neutrals;
+    s.fit.tps = args.tps;
+    s.fit.tps_smoothing = args.tps_smoothing;
     s.highlights.enabled = args.protect_highlights;
     s.highlights.clip_di = args.clip_di;
     s.highlights.softness = args.highlight_softness;
@@ -305,6 +313,12 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
                 ratio(&f.m_dwg_after_wb)
             );
             println!("  White bal.  R ×{:.4}, G ×1, B ×{:.4} (linear DWG)", f.wb_gains[0], f.wb_gains[2]);
+            if let (Some(t), Some(c)) = (&f.tps, f.tps_check) {
+                println!(
+                    "  Spline      smoothing {:.4}: chart mean {:.2} (matrix {:.2}); cross-check {:.2}",
+                    t.smoothing, f.mean_after, f.mean_matrix, c
+                );
+            }
             println!("  M_XYZ       {:?}", [f.m_xyz.row(0), f.m_xyz.row(1), f.m_xyz.row(2)].map(|r| [r[0], r[1], r[2]].map(|v| (v * 1e5).round() / 1e5)));
             if let Some(t) = &f.tone {
                 println!("  Tone        power {:?}, black {:?}", t.power.map(|v| (v * 1e4).round() / 1e4), t.black.map(|v| (v * 1e5).round() / 1e5));
