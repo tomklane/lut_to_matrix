@@ -249,7 +249,11 @@ fn chart_dctl_compiles_and_matches() {
     ];
     for (model, preserve, protect, wb, tps) in cases {
         let s = ChartSettings {
-            fit: lutmatrix_core::chart::fit::FitSettings { model, preserve_neutrals: preserve, tps, ..Default::default() },
+            fit: lutmatrix_core::chart::fit::FitSettings {
+                model: if tps { Model::Tps } else { model },
+                preserve_neutrals: preserve,
+                ..Default::default()
+            },
             // A clip inside the tested codes (up to 0.7), so the protection is exercised.
             highlights: HighlightSettings { enabled: protect, clip_di: Some(0.55), softness: 1.5, strength: 0.9 },
             white_balance: wb,
@@ -271,10 +275,11 @@ fn chart_dctl_compiles_and_matches() {
         }
         let src = a.dctl("2026-01-01").unwrap();
         assert!(src.is_ascii());
-        assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone);
+        assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone && !tps);
+        assert_eq!(src.contains("M_XYZ"), !tps);
         assert_eq!(src.contains("p_HlClip"), protect);
         assert_eq!(src.contains("TPS_C["), tps);
-        assert!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))));
+        assert_eq!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))), !tps);
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
         let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}-{tps}", std::process::id()));

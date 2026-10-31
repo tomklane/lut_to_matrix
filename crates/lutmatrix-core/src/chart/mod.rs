@@ -430,7 +430,17 @@ impl ChartAnalysis {
             model: match f.settings.model {
                 fit::Model::Matrix => "3x3 matrix in XYZ".to_string(),
                 fit::Model::MatrixTone => "per-channel tone curve in linear DWG + 3x3 matrix in XYZ".to_string(),
-            } + if f.settings.preserve_neutrals {
+                fit::Model::Tps => format!(
+                    "TPS3D thin-plate spline in DI DWG, no matrix ({} patches, smoothing {}), gray-corrected",
+                    match f.settings.tps_patches {
+                        fit::TpsPatches::All => "colour patches and grays",
+                        fit::TpsPatches::Primaries => "6 primaries and grays",
+                    },
+                    f.settings.tps_smoothing
+                ),
+            } + if f.settings.model == fit::Model::Tps {
+                ""
+            } else if f.settings.preserve_neutrals {
                 ", neutrals preserved after the white balance (equal RGB stays equal)"
             } else if f.settings.lock_neutral {
                 ", neutral locked"

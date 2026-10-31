@@ -9,13 +9,14 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.7.0] - 2026-10-31
 
 ### Added
-- **Spline (TPS)** for chart corrections (DECISIONS D44): an optional thin-plate spline
-  after the matrix bends colours so each patch moves towards its target, with grays and
-  white held in place. Smoothing from *Exact* to *Strong*. The app shows a cross-check
-  (each patch predicted by a spline fitted without it) next to the matrix's error, so
-  you can see whether the spline helps colours between the patches or just fits the
-  chart. In the DCTL, with a *TPS Off* checkbox to compare. CLI: `--tps`,
-  `--tps-smoothing`.
+- **TPS3D model** for chart corrections (DECISIONS D44), like TPS3D Fast in the Python
+  matrix app, with no colour matrix: a per-channel curve through the grays, then a
+  thin-plate spline through the patches (all colours, or the 6 primaries) with TPS3D
+  Fast's anchors and gray correction, so the spline never moves the neutral axis.
+  Smoothing *Exact* (default), *Light* or *Normal*. The app shows a cross-check for
+  TPS3D and for the matrix (each patch predicted by a fit that never saw it), so you can
+  see which one does better between the patches. Exported as its own DCTL. CLI:
+  `--model tps`, `--tps-primaries`, `--tps-smoothing`.
 
 ## [0.6.0] - 2026-10-30
 

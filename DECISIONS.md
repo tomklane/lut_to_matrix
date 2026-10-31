@@ -643,29 +643,34 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
 - Rendering is multi-threaded, at most 1600 px across; the corrected image is fetched
   only when the view shows it, again after every change to the analysis.
 
-## D44 — Thin-plate spline after the matrix (user request 2026-10-31, "TPS3D")
-- Optional (fit setting *Spline (TPS)*, default off), after the matrix and white balance,
-  so it refines rather than replaces: the matrix carries the global map (and what
-  happens far from the chart), the spline only the remaining, local error.
-- Space: DaVinci Intermediate–encoded DWG (log-like, so the bending is about evenly
-  visible from shadows to highlights; the DCTL already has the curve). Kernel: the 3D
-  biharmonic φ(r) = r with an affine part, fitted to the residual target − matrix
-  output; the side conditions (Σw = 0, Σw·c = 0) make the kernel sum level off far from
-  the chart. φ(r) = r is conditionally negative definite, so smoothing enters as −λ/w on
-  the diagonal (a sign error there made large λ diverge).
-- Neutral anchors: zero residual at black and at 2–32 × the chart's white on the neutral
-  axis (weight 50), so grays, clipped white and very bright neutrals stay as the matrix
-  makes them; highlight protection still works.
-- Smoothing presets: Exact 0, Light 0.005, Normal 0.02 (default), Strong 0.1 (DI units).
-  Patch weights: neutrals 2 × (the fit's neutral weight).
-- Honesty check: leave-one-out, each used patch predicted by a spline fitted without it,
-  reported next to the matrix's mean; a note says so when the spline doesn't predict
-  better. On the underwater chart (6.5 ΔE after the matrix) the spline reaches 1.4 on the
-  chart at Normal but 6.85 in the cross-check: the leftover errors there are
-  patch-specific (spectral), not smooth, so the spline mostly fits the chart itself. On
-  a smooth camera difference (test: a saturation-dependent bend) it removes most of
-  the error and the cross-check improves.
-- DCTL: the points as `__CONSTANT__` arrays, the sum in `transform()` (constant arrays are
-  read directly there), a *TPS Off* checkbox (unticked = on, so a control Resolve adds
-  unticked keeps the correction, D42).
-
+## D44 — TPS3D model (user request 2026-10-31)
+- A third chart model, *TPS3D*, built like "TPS3D Fast" in the user's Python matrix app
+  (`rbf_solver.py`, ported in its `mf-solve`), and on the user's request with **no colour
+  matrix**: a per-channel gray curve, then a 3D thin-plate spline, both in DaVinci
+  Intermediate DWG. No white balance gains, no tone model, no DCTL WB checkbox.
+- Spline: kernel φ(r) = r (3D biharmonic) with an affine part, smoothing 0 by default
+  (exact through every point, as TPS3D Fast). φ(r) = r is conditionally negative
+  definite, so smoothing enters as −λ/w on the diagonal (TPS3D Fast's +λ is harmless only
+  because it uses 0).
+- Control points (TPS3D Fast's set): the colour patches (all 18, or the 6 primaries)
+  and the grays, synthetic neutrals (L,L,L) → (L,L,L) at each patch's level and at DI
+  0.01, 0.02, DI(1) − 0.01, DI(1), and the 8 DI cube corners mapped to themselves.
+- Gray correction (TPS3D Fast's bias subtraction) everywhere the spline is evaluated:
+  `out = f(d) − (f(L,L,L) − (L,L,L))`, L = mean(d): the spline never moves the neutral
+  axis.
+- Gray curve: TPS3D Fast fits per-channel tone curves through the grays (Catmull-Rom)
+  and applies the spline *before* them (trained on source → inverse curve(target)). Here:
+  a monotone cubic (Fritsch–Carlson) per channel through the usable grays, camera DI →
+  target DI, linear beyond the end grays, applied *before* the spline. Measured on the
+  underwater chart (leave-one-out, DI distance): spline alone 0.071, spline then curve
+  (TPS3D Fast's order) 0.052, curve then spline 0.041; and with the curve after the
+  spline, equal R, G, B at the clip comes out red again (0.95 : 0.86 : 0.84 DI) because
+  the curve white-balances it. Curve first puts the camera's grays on the neutral axis,
+  where the gray correction keeps them; highlight protection rebuilds clipped channels
+  towards the camera's gray, which the curve makes neutral, so clipped areas go white.
+- Honesty check: leave-one-out for the spline and, for a fair comparison, for the 3×3
+  matrix model on the same patches. Underwater chart: TPS3D 9.0 vs matrix 7.3 ΔE (24
+  patches); a 9-patch still: 12.3 vs 22.9. A note says when TPS3D doesn't predict better.
+- DCTL: the gray curve as per-channel Hermite segments with literals, the points as
+  `__CONSTANT__` arrays read in `transform()`, one loop for f(d) and f(L,L,L); `Amount`
+  blends in DI.

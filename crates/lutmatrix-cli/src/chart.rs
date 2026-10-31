@@ -36,7 +36,7 @@ pub struct ChartArgs {
     /// after2014 or before2014.
     #[arg(long, default_value = "after2014")]
     edition: String,
-    /// matrix or tone (matrix + per-channel tone curve).
+    /// matrix, tone (matrix + per-channel tone curve) or tps (TPS3D spline, no matrix).
     #[arg(long, default_value = "matrix")]
     model: String,
     /// match (correct the exposure too) or keep.
@@ -52,10 +52,10 @@ pub struct ChartArgs {
     /// so the grays keep what is left of the camera's cast.
     #[arg(long)]
     preserve_neutrals: bool,
-    /// Add a thin-plate spline after the matrix (moves each patch towards its target).
+    /// TPS3D only: fit the six primaries (and the grays) instead of all colour patches.
     #[arg(long)]
-    tps: bool,
-    /// The spline's smoothing (0 = exact through every patch).
+    tps_primaries: bool,
+    /// TPS3D only: the spline's smoothing (0 = exact through every patch).
     #[arg(long, default_value_t = lutmatrix_core::chart::fit::DEFAULT_TPS_SMOOTHING)]
     tps_smoothing: f64,
     /// Highlight protection in the DCTL: near the clip, clipped areas go to white.
@@ -178,6 +178,7 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     s.fit.model = match args.model.as_str() {
         "matrix" => Model::Matrix,
         "tone" => Model::MatrixTone,
+        "tps" | "tps3d" => Model::Tps,
         m => return Err(format!("unknown model '{m}'")),
     };
     s.fit.exposure = match args.exposure.as_str() {
@@ -188,7 +189,9 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     s.fit.lock_neutral = !args.no_lock_neutral;
     s.fit.restraint = args.restraint;
     s.fit.preserve_neutrals = args.preserve_neutrals;
-    s.fit.tps = args.tps;
+    if args.tps_primaries {
+        s.fit.tps_patches = lutmatrix_core::chart::fit::TpsPatches::Primaries;
+    }
     s.fit.tps_smoothing = args.tps_smoothing;
     s.highlights.enabled = args.protect_highlights;
     s.highlights.clip_di = args.clip_di;
@@ -315,8 +318,12 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
             println!("  White bal.  R ×{:.4}, G ×1, B ×{:.4} (linear DWG)", f.wb_gains[0], f.wb_gains[2]);
             if let (Some(t), Some(c)) = (&f.tps, f.tps_check) {
                 println!(
-                    "  Spline      smoothing {:.4}: chart mean {:.2} (matrix {:.2}); cross-check {:.2}",
-                    t.smoothing, f.mean_after, f.mean_matrix, c
+                    "  TPS3D       smoothing {:.4}: chart mean {:.2}, cross-check {:.2}; the matrix model: {:.2}, cross-check {:.2}",
+                    t.smoothing,
+                    f.mean_after,
+                    c,
+                    f.mean_matrix,
+                    f.matrix_check.unwrap_or(f64::NAN)
                 );
             }
             println!("  M_XYZ       {:?}", [f.m_xyz.row(0), f.m_xyz.row(1), f.m_xyz.row(2)].map(|r| [r[0], r[1], r[2]].map(|v| (v * 1e5).round() / 1e5)));
