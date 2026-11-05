@@ -741,3 +741,31 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   linear, and the DI mixer needs smaller values than a linear one (measured on the
   underwater chart: about half the red noise).
 
+## D48 — Noise-aware chart fitting (user request 2026-11-05)
+- Noise is measured on the chart: every patch's pixel noise covariance from the
+  differences of neighbouring samples (half their covariance; the largest 10 % left out),
+  so a light gradient across the patch doesn't count as noise. It is taken through the
+  still's decoding, linearised at the patch (`J Σ Jᵀ`), to linear DWG. The trim and any
+  spatial correlation (demosaicing, compression) make it an underestimate; only ratios are
+  used, so that cancels.
+- Where: neutral 5 (patch 22), else the nearest usable gray. Without a measurement (the
+  fit gets patches without pixels, e.g. a target chart or tests) each channel's variance
+  is assumed proportional to its level (photon noise), and the report says "assumed".
+- What counts: the correction's response to that noise in CIELAB (central differences
+  along the Cholesky factor of Σ: the full covariance, so correlated channel noise is
+  right), split into brightness (L*) and colour (a*, b*). Colour noise is weighted by the
+  *noise_colour* setting (default 0.5: the eye is less sensitive to chroma noise, and
+  chroma noise reduction removes it with little loss of detail; low values steer the fit
+  to keep red out of brightness). Normalised by the still's own noise at the same
+  exposure, so the setting doesn't depend on ISO.
+- How: extra least-squares residuals `40 · noise · √(n/24) · (W J C) / ‖W J C‖_still`
+  (9 values), in every model that is fitted by optimisation: Matrix, Matrix + tone, the
+  matrix of Matrix + TPS3D, Preserve neutrals, RGB Mixer, Gain + Mixer. TPS3D alone is a
+  linear solve; its smoothing is its regulariser. `noise = 0` adds nothing (the fits are
+  unchanged). Scale 40 chosen on the user's underwater chart: noise 1 cut the matrix's
+  brightness noise from ×1.55 to ×1.08 and red from ×3.1 to ×2.0 for 6.5 → 8.4 ΔE2000;
+  the app offers 0.4 / 0.8 / 1.5.
+- Reported for every fit (setting on or off): brightness, colour and linear R, G, B noise
+  times the still's, and the same for a plain white balance (DWG gains to the target
+  gray) as a floor to compare with. Less noise is mostly bought by mixing channels
+  (averaging), i.e. less saturation; the ΔE shows the cost.

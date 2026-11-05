@@ -560,6 +560,15 @@
             <div class="small muted num">
               max {fmt(f.max_after, 1)} · neutrals {fmt(f.neutral_after, 1)} · still {f.exposure_ratio >= 1 ? "+" : ""}{fmt(Math.log2(f.exposure_ratio), 2)} stops from the target
             </div>
+            {#if f.noise}
+              <div
+                class="small muted num"
+                title="Noise at mid gray (patch {f.noise.patch + 1}) after the correction, times the still's own{f.noise.measured ? '' : ' (assumed: not measured in the still)'}. Linear R / G / B: ×{fmt(f.noise.channels[0], 2)} / ×{fmt(f.noise.channels[1], 2)} / ×{fmt(f.noise.channels[2], 2)}. A plain white balance: brightness ×{fmt(f.noise.wb_brightness, 2)}, colour ×{fmt(f.noise.wb_colour, 2)}, red ×{fmt(f.noise.wb_channels[0], 2)}."
+              >
+                noise: brightness ×{fmt(f.noise.brightness, 1)} · colour ×{fmt(f.noise.colour, 1)} · red ×{fmt(f.noise.channels[0], 1)}
+                <span class="faint">(white balance alone ×{fmt(f.noise.wb_brightness, 1)} · ×{fmt(f.noise.wb_colour, 1)} · ×{fmt(f.noise.wb_channels[0], 1)})</span>
+              </div>
+            {/if}
           {:else if a?.fit_error}
             <div class="err"><Icon name="warn" /> {a.fit_error}</div>
           {:else}
@@ -761,6 +770,39 @@
               />
             </div>
           </div>
+          {/if}
+          {#if !tps}
+          <div class="row">
+            <div class="label">Noise-aware<div class="sub">Trades some chart accuracy for less noise (measured on the chart)</div></div>
+            <div class="value">
+              <Segmented
+                bind:value={app.chart.fit.noise}
+                label="Noise-aware"
+                options={[
+                  { value: 0, label: "Off" },
+                  { value: 0.4, label: "Light" },
+                  { value: 0.8, label: "Medium" },
+                  { value: 1.5, label: "Strong" },
+                ]}
+              />
+            </div>
+          </div>
+          {#if app.chart.fit.noise > 0}
+          <div class="row">
+            <div class="label">Colour noise counts<div class="sub">Low moves noise out of brightness, for chroma noise reduction after</div></div>
+            <div class="value">
+              <Segmented
+                bind:value={app.chart.fit.noise_colour}
+                label="Colour noise counts"
+                options={[
+                  { value: 0.15, label: "Low" },
+                  { value: 0.5, label: "Half" },
+                  { value: 1, label: "Fully" },
+                ]}
+              />
+            </div>
+          </div>
+          {/if}
           {/if}
           {#if hasTps}
           <div class="row">

@@ -45,6 +45,14 @@ pub struct ChartArgs {
     /// Pull the matrix towards a plain white balance, 0 (none) … 1 (strong).
     #[arg(long, default_value_t = 0.0)]
     restraint: f64,
+    /// Noise-aware fitting, 0 (off) … 1 (strong): trade some chart accuracy for less
+    /// noise at mid gray (measured on the chart).
+    #[arg(long, default_value_t = 0.0)]
+    noise: f64,
+    /// How much colour noise counts against brightness noise, 0 … 1 (lower moves noise
+    /// out of brightness into colour, for chroma noise reduction).
+    #[arg(long, default_value_t = lutmatrix_core::chart::fit::DEFAULT_NOISE_COLOUR)]
+    noise_colour: f64,
     /// Don't lock the neutral patches to the target's gray.
     #[arg(long)]
     no_lock_neutral: bool,
@@ -197,6 +205,8 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     };
     s.fit.lock_neutral = !args.no_lock_neutral;
     s.fit.restraint = args.restraint;
+    s.fit.noise = args.noise;
+    s.fit.noise_colour = args.noise_colour;
     s.fit.preserve_neutrals = args.preserve_neutrals;
     s.fit.mixer_preserve = !args.mixer_free;
     if args.mixer_linear {
@@ -317,6 +327,14 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
                 f.neutral_gain
             );
             println!("  ΔE2000      mean {:.2} → {:.2}, max {:.2}, neutrals {:.2}; {} patches", f.mean_before, f.mean_after, f.max_after, f.neutral_after, f.used);
+            if let Some(n) = &f.noise {
+                println!(
+                    "  Noise       brightness ×{:.2}, colour ×{:.2}; R ×{:.2} G ×{:.2} B ×{:.2} (white balance alone: ×{:.2}, ×{:.2}; R ×{:.2} G ×{:.2} B ×{:.2}){}",
+                    n.brightness, n.colour, n.channels[0], n.channels[1], n.channels[2],
+                    n.wb_brightness, n.wb_colour, n.wb_channels[0], n.wb_channels[1], n.wb_channels[2],
+                    if n.measured { "" } else { " [assumed: not measured]" }
+                );
+            }
             let [gr, _, gb] = f.gray_dwg;
             let ratio = |m: &lutmatrix_core::math::Mat3| {
                 let w = m * lutmatrix_core::math::Vec3::repeat(1.0);
