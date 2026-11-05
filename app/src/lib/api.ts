@@ -448,6 +448,10 @@ export interface ChartFitSettings {
   /** RGB Mixer: Resolve's Preserve Luminance; what the node works on. */
   mixer_preserve: boolean;
   mixer_space: "di" | "linear";
+  /** Noise-aware fitting: 0 = off … 1 = strong (1.5 in the app's Strong). */
+  noise: number;
+  /** How much colour noise counts against brightness noise (0 … 1). */
+  noise_colour: number;
 }
 export interface HighlightSettings {
   enabled: boolean;
@@ -492,10 +496,14 @@ export const defaultChartFit: ChartFitSettings = {
   tps_smoothing: 0,
   mixer_preserve: true,
   mixer_space: "di",
+  noise: 0,
+  noise_colour: 0.5,
 };
 export interface PatchSample {
   mean: [number, number, number];
   std: [number, number, number];
+  /** Pixel noise covariance as stored (from neighbouring pixels). */
+  noise: Mat3;
   low_clip: [number, number, number];
   high_clip: [number, number, number];
   n: number;
@@ -561,7 +569,19 @@ export interface ChartFit {
   mixer: ChartMixer | null;
   /** The node chain: linear Gain + Saturation, then the RGB Mixer. */
   chain: { gains: [number, number, number]; saturation: number; luma: [number, number, number]; mixer: ChartMixer } | null;
+  /** Noise at mid gray after the correction, times the still's own. */
+  noise: ChartNoise | null;
   notes: string[];
+}
+export interface ChartNoise {
+  brightness: number;
+  colour: number;
+  channels: [number, number, number];
+  wb_brightness: number;
+  wb_colour: number;
+  wb_channels: [number, number, number];
+  patch: number;
+  measured: boolean;
 }
 export interface ChartAnalysis {
   file_name: string;

@@ -66,7 +66,10 @@ correction from tinting white. *TPS3D* replaces the matrix with a colour-only gr
 balance and thin-plate spline (exposure and contrast stay as shot); *Matrix + TPS3D* runs
 it after the matrix. Compare the cross-check with the matrix's before trusting either.
 *RGB Mixer* gives values to type into Resolve's RGB Mixer; *Gain + Mixer* gives Gain
-and Saturation for a linear node and the RGB Mixer for the next one. Drag the blue corner handles
+and Saturation for a linear node and the RGB Mixer for the next one. Each fit shows how
+much noise it adds at mid gray, measured on the chart; *Noise-aware* trades some chart
+accuracy for less (set *Colour noise counts* to Low to keep the noise out of brightness,
+then remove the colour noise with chroma-only noise reduction). Drag the blue corner handles
 to fine-tune where the patches are sampled. Under the
 image, *Before / After / Split* shows the
 correction as the DCTL applies it (plain or through OpenDRT), and *Other Still…* shows
@@ -195,6 +198,7 @@ lutmatrix chart still.tif                                   # find the chart, de
 lutmatrix chart still.tif --dctl Camera_Chart.dctl          # write the correction (DWG/DI in and out)
 lutmatrix chart still.exr --curve linear --gamut xyz        # say what the still was exported in
 lutmatrix chart still.tif --model tone --restraint 0.25     # add a per-channel tone curve; gentler matrix
+lutmatrix chart still.tif --noise 0.8 --noise-colour 0.15   # noise-aware: less noise, mostly kept out of brightness
 lutmatrix chart b_cam.tif --target a_cam.tif --dctl b_to_a.dctl   # match camera B to camera A's chart
 lutmatrix chart still.tif --opendrt --save "Chart Cam B"    # also fit an OpenDRT preset (after the matrix)
 lutmatrix chart still.tif --protect-highlights --dctl c.dctl # clipped areas go to white (clip measured, or --clip-di 0.68)

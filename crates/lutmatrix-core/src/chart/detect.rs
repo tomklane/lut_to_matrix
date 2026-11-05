@@ -625,6 +625,9 @@ pub struct PatchSample {
     pub mean: [f64; 3],
     /// Standard deviation over the kept pixels (noise / non-uniformity).
     pub std: [f64; 3],
+    /// Pixel noise as stored, a covariance (code values²): from the differences between
+    /// neighbouring samples, so a gradient across the patch doesn't count (D48).
+    pub noise: [[f64; 3]; 3],
     /// Fraction of sampled pixels at the bottom / top clip level, per channel.
     pub low_clip: [f64; 3],
     pub high_clip: [f64; 3],
@@ -685,6 +688,7 @@ pub fn sample_patch(img: &ChartImage, p: &Placement, c: usize, r: usize, frac: f
     let pitch = p.pitch();
     let n = ((pitch * frac).round() as usize).clamp(3, 48);
     let mut vals: Vec<[f64; 3]> = Vec::with_capacity(n * n);
+    let mut grid: Vec<Option<[f64; 3]>> = vec![None; n * n];
     for a in 0..n {
         for b in 0..n {
             let du = (a as f64 + 0.5) / n as f64 - 0.5;
@@ -696,13 +700,15 @@ pub fn sample_patch(img: &ChartImage, p: &Placement, c: usize, r: usize, frac: f
             }
             let px = img.pixel(x as usize, y as usize);
             if px.iter().all(|v| v.is_finite()) {
-                vals.push([px[0] as f64, px[1] as f64, px[2] as f64]);
+                let v = [px[0] as f64, px[1] as f64, px[2] as f64];
+                vals.push(v);
+                grid[a * n + b] = Some(v);
             }
         }
     }
     let total = vals.len();
     if total == 0 {
-        return PatchSample { mean: [f64::NAN; 3], std: [f64::NAN; 3], low_clip: [1.0; 3], high_clip: [0.0; 3], n: 0 };
+        return PatchSample { mean: [f64::NAN; 3], std: [f64::NAN; 3], noise: [[f64::NAN; 3]; 3], low_clip: [1.0; 3], high_clip: [0.0; 3], n: 0 };
     }
     let mut low_clip = [0.0; 3];
     let mut high_clip = [0.0; 3];
@@ -733,7 +739,32 @@ pub fn sample_patch(img: &ChartImage, p: &Placement, c: usize, r: usize, frac: f
     let kept: Vec<[f64; 3]> = dev[..keep].iter().map(|(_, i)| vals[*i]).collect();
     let mean: [f64; 3] = std::array::from_fn(|k| kept.iter().map(|v| v[k]).sum::<f64>() / keep as f64);
     let std: [f64; 3] = std::array::from_fn(|k| (kept.iter().map(|v| (v[k] - mean[k]).powi(2)).sum::<f64>() / keep as f64).sqrt());
-    PatchSample { mean, std, low_clip, high_clip, n: total }
+    PatchSample { mean, std, noise: neighbour_noise(&grid, n), low_clip, high_clip, n: total }
+}
+
+/// Noise covariance from the differences of horizontally and vertically neighbouring
+/// samples (each difference holds twice the pixel variance); the largest 10 % (edges,
+/// dust, a patch border) are left out. NaN when there are too few.
+fn neighbour_noise(grid: &[Option<[f64; 3]>], n: usize) -> [[f64; 3]; 3] {
+    let mut d: Vec<[f64; 3]> = Vec::new();
+    for a in 0..n {
+        for b in 0..n {
+            let Some(v) = grid[a * n + b] else { continue };
+            for (a2, b2) in [(a + 1, b), (a, b + 1)] {
+                if a2 < n && b2 < n {
+                    if let Some(w) = grid[a2 * n + b2] {
+                        d.push([w[0] - v[0], w[1] - v[1], w[2] - v[2]]);
+                    }
+                }
+            }
+        }
+    }
+    if d.len() < 8 {
+        return [[f64::NAN; 3]; 3];
+    }
+    d.sort_by(|x, y| (x[0].abs() + x[1].abs() + x[2].abs()).total_cmp(&(y[0].abs() + y[1].abs() + y[2].abs())));
+    let keep = &d[..(d.len() * 9).div_ceil(10)];
+    std::array::from_fn(|i| std::array::from_fn(|j| keep.iter().map(|v| v[i] * v[j]).sum::<f64>() / (2.0 * keep.len() as f64)))
 }
 
 /// Serde for a Mat3 as row-major rows.
@@ -754,6 +785,36 @@ mod mat_rows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn neighbour_noise_ignores_gradients() {
+        // A steep gradient plus known noise (R σ 0.02, G σ 0.01, B = G's): the gradient
+        // adds almost nothing; the trimmed estimate is close to the variance (a little
+        // under, the same for every channel).
+        let n = 40;
+        let mut seed = 7u64;
+        let mut gauss = || {
+            let mut u = || {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((seed >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+            };
+            (-2.0 * u().ln()).sqrt() * (std::f64::consts::TAU * u()).cos()
+        };
+        let grid: Vec<Option<[f64; 3]>> = (0..n * n)
+            .map(|k| {
+                let ramp = 0.3 + 0.004 * (k / n) as f64 + 0.002 * (k % n) as f64;
+                let g = 0.01 * gauss();
+                Some([ramp + 0.02 * gauss(), ramp + g, ramp + g])
+            })
+            .collect();
+        let c = neighbour_noise(&grid, n);
+        let r = c[0][0] / 4e-4;
+        assert!((0.6..1.05).contains(&r), "{r}");
+        assert!((c[1][1] / 1e-4 - r).abs() < 0.15, "{c:?}");
+        // G and B move together: fully correlated.
+        assert!((c[1][2] / c[1][1] - 1.0).abs() < 1e-9 && c[0][1].abs() < 0.2 * c[1][1], "{c:?}");
+        assert!(neighbour_noise(&vec![None; 9], 3)[0][0].is_nan());
+    }
 
     #[test]
     fn homography_recovers_a_known_one() {

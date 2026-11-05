@@ -6,6 +6,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-05
+
+### Added
+- **Noise-aware fitting** for the chart (DECISIONS D48): the noise in the still is measured
+  on the chart's patches, and *Noise-aware* (Off / Light / Medium / Strong) trades some
+  chart accuracy for less noise at mid gray. *Colour noise counts* (Low / Half / Fully)
+  sets how much colour noise matters against brightness noise: Low keeps the noise out of
+  brightness, for chroma-only noise reduction afterwards. Every model with a matrix or
+  mixer; not TPS3D alone. CLI: `--noise`, `--noise-colour`.
+- Every chart fit shows its noise at mid gray (brightness, colour, red), times the
+  still's, next to what a plain white balance would give.
+
 ## [0.10.1] - 2026-11-05
 
 ### Fixed

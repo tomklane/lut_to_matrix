@@ -31,7 +31,8 @@ use self::image::{ChartImage, ImageInfo};
 use self::reference::{ChartEdition, NEUTRALS, PATCH_NAMES};
 use crate::difference::xyz_to_lab;
 use crate::fit::least_squares;
-use crate::math::{whites, Vec3};
+use crate::math::{whites, Mat3, Vec3};
+use crate::spaces::davinci;
 use crate::spaces::display::DisplayGamut;
 
 /// What the camera's chart should be corrected to.
@@ -232,6 +233,26 @@ fn placement_score(img: &ChartImage, p: &Placement, s: &ChartSettings, clip: &Cl
     mean + 5.0 * inversions as f64
 }
 
+/// A patch's noise covariance in linear DWG: the stored one through the still's decoding,
+/// linearised at the patch (`J Σ Jᵀ`).
+fn dwg_noise(space: &StillSpace, code: &[f64; 3], cov: &[[f64; 3]; 3]) -> Option<Mat3> {
+    let c = Mat3::from_fn(|i, j| cov[i][j]);
+    if !c.iter().all(|v| v.is_finite()) || !code.iter().all(|v| v.is_finite()) || c.trace() <= 0.0 {
+        return None;
+    }
+    let to = |v: &[f64; 3]| davinci::xyz_to_dwg() * space.to_xyz(v);
+    let h = 1e-4;
+    let mut j = Mat3::zeros();
+    for k in 0..3 {
+        let (mut a, mut b) = (*code, *code);
+        a[k] += h;
+        b[k] -= h;
+        j.set_column(k, &((to(&a) - to(&b)) / (2.0 * h)));
+    }
+    let d = j * c * j.transpose();
+    d.iter().all(|v| v.is_finite()).then_some(d)
+}
+
 /// sRGB 8-bit for display of an XYZ (D65) reflectance-scale colour.
 pub fn srgb8(xyz: &Vec3) -> [u8; 3] {
     let rgb = DisplayGamut::Rec709.primaries().xyz_to_rgb() * xyz;
@@ -327,7 +348,13 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
         };
     }
     let patches: Vec<FitPatch> = (0..24)
-        .map(|i| FitPatch { xyz: xyz[i], target: target_xyz[i], neutral: i >= 18, used: reasons[i].is_none() })
+        .map(|i| FitPatch {
+            xyz: xyz[i],
+            target: target_xyz[i],
+            neutral: i >= 18,
+            used: reasons[i].is_none(),
+            noise: dwg_noise(&space, &sm.codes[i], &sm.samples[i].noise),
+        })
         .collect();
     let clipped = (0..24).filter(|&i| sm.low[i].iter().chain(&sm.high[i]).any(|b| *b)).count();
     if clipped > 0 {

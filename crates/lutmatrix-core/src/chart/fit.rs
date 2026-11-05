@@ -120,6 +120,14 @@ pub struct FitSettings {
     pub mixer_preserve: bool,
     /// RGB Mixer: what the node works on.
     pub mixer_space: MixerSpace,
+    /// Noise-aware fitting (D48): 0 = off (best chart match) … 1 = strong. Weighs the
+    /// noise the correction adds at mid gray (measured on the chart) against the chart
+    /// error. Not used by TPS3D alone (its smoothing does that job).
+    pub noise: f64,
+    /// How much colour noise (a*, b*) counts against brightness noise (L*): 1 = the same,
+    /// lower lets the fit move noise out of brightness into colour, where chroma noise
+    /// reduction removes it with little loss of detail.
+    pub noise_colour: f64,
 }
 
 /// Default for [`FitSettings::tps_smoothing`].
@@ -138,9 +146,17 @@ impl Default for FitSettings {
             tps_smoothing: DEFAULT_TPS_SMOOTHING,
             mixer_preserve: true,
             mixer_space: MixerSpace::Di,
+            noise: 0.0,
+            noise_colour: DEFAULT_NOISE_COLOUR,
         }
     }
 }
+
+/// Default for [`FitSettings::noise_colour`].
+pub const DEFAULT_NOISE_COLOUR: f64 = 0.5;
+
+/// Strength of the noise term at `noise` = 1, relative to the chart error (D48).
+const NOISE_SCALE: f64 = 40.0;
 
 /// Per-channel tone curve in linear DWG: y = 0.18·((x − black)/0.18)^power above the
 /// toe (x − black ≥ [`TONE_TOE`]), the tangent line below it.
@@ -184,6 +200,79 @@ pub struct FitPatch {
     pub target: Vec3,
     pub neutral: bool,
     pub used: bool,
+    /// Pixel noise of the patch: a covariance in linear DWG (None: not measured).
+    pub noise: Option<Mat3>,
+}
+
+/// The noise at mid gray after the correction, relative to the still's own (exposure
+/// matched): what the fit weighs when it is noise-aware, reported for every fit (D48).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct NoiseReport {
+    /// Brightness (L*) noise, times the still's.
+    pub brightness: f64,
+    /// Colour (a*, b*) noise, times the still's.
+    pub colour: f64,
+    /// Linear DWG R, G, B noise, times the still's in the same channel.
+    pub channels: [f64; 3],
+    /// The same three for a plain white balance (gains in linear DWG), for comparison:
+    /// about the least any full correction of the cast can do.
+    pub wb_brightness: f64,
+    pub wb_colour: f64,
+    pub wb_channels: [f64; 3],
+    /// The patch it is measured on (chart index), and whether its noise was measured in
+    /// the still (false: assumed, each channel's variance proportional to its level).
+    pub patch: usize,
+    pub measured: bool,
+}
+
+/// Noise at one gray: where to look, and the noise (Cholesky factor `C`, C·Cᵀ = Σ in
+/// linear DWG).
+struct NoiseModel {
+    x0: Vec3,
+    c: Mat3,
+    wn: Vec3,
+    patch: usize,
+    measured: bool,
+}
+
+impl NoiseModel {
+    fn new(p: &[FitPatch], wn: Vec3) -> Option<NoiseModel> {
+        let patch = [21, 20, 22, 19, 18, 23].into_iter().find(|&i| i < p.len() && p[i].used)?;
+        let x0 = p[patch].xyz;
+        let lvl = davinci::xyz_to_dwg() * x0;
+        let (cov, measured) = match p[patch].noise {
+            Some(c) if c.trace() > 0.0 => (c, true),
+            _ => (Mat3::from_diagonal(&lvl.map(|v| v.abs().max(1e-6))), false),
+        };
+        let jitter = Mat3::identity() * (1e-9 * cov.trace());
+        let c = (cov + jitter).cholesky()?.l();
+        (c.iter().all(|v| v.is_finite()) && x0.iter().all(|v| v.is_finite())).then_some(NoiseModel { x0, c, wn, patch, measured })
+    }
+
+    /// Column k: the output's response to one standard deviation of noise along the
+    /// k-th Cholesky direction, through `out` (Lab or DWG).
+    fn response(&self, f: &dyn Fn(&Vec3) -> Vec3, out: &dyn Fn(&Vec3) -> Vec3) -> Mat3 {
+        let mut j = Mat3::zeros();
+        let lvl = (davinci::xyz_to_dwg() * self.x0).norm().max(1e-6);
+        for k in 0..3 {
+            let col = self.c.column(k).into_owned();
+            let t = 1e-3 * lvl / col.norm().max(1e-12);
+            let d = davinci::dwg_to_xyz() * (col * t);
+            j.set_column(k, &((out(&f(&(self.x0 + d))) - out(&f(&(self.x0 - d)))) / (2.0 * t)));
+        }
+        j
+    }
+
+    fn lab_response(&self, f: &dyn Fn(&Vec3) -> Vec3) -> Mat3 {
+        self.response(f, &|x| lab(x, &self.wn))
+    }
+
+    /// (brightness, colour, channels) noise of `f`.
+    fn measure(&self, f: &dyn Fn(&Vec3) -> Vec3) -> (f64, f64, [f64; 3]) {
+        let l = self.lab_response(f);
+        let d = self.response(f, &|x| davinci::xyz_to_dwg() * x);
+        (l.row(0).norm(), (l.row(1).norm_squared() + l.row(2).norm_squared()).sqrt(), std::array::from_fn(|k| d.row(k).norm()))
+    }
 }
 
 /// The fitted correction.
@@ -236,6 +325,8 @@ pub struct ChartFit {
     pub tps_check: Option<f64>,
     /// TPS3D: the same leave-one-out for the 3×3 matrix model, for a fair comparison.
     pub matrix_check: Option<f64>,
+    /// Noise at mid gray after the correction (None: no usable gray).
+    pub noise: Option<NoiseReport>,
     pub notes: Vec<String>,
 }
 
@@ -313,6 +404,25 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     let wn = whites::D65.to_xyz() * k;
     let target: Vec<Vec3> = patches.iter().map(|p| p.target * k).collect();
     let weight = |i: usize| if patches[i].neutral { s.neutral_weight } else { 1.0 };
+
+    // Noise-aware: the correction's noise at mid gray (L*, and a*, b* times
+    // `noise_colour`), relative to the still's own, as extra residuals (D48).
+    let nm = NoiseModel::new(patches, wn);
+    let cw = if s.noise_colour.is_finite() { s.noise_colour.clamp(0.0, 1.0) } else { DEFAULT_NOISE_COLOUR };
+    let still = move |x: &Vec3| x * (k / ratio);
+    let noise_ref = nm.as_ref().map(|m| {
+        let l = m.lab_response(&still);
+        (l.row(0).norm_squared() + cw * cw * (l.row(1).norm_squared() + l.row(2).norm_squared())).sqrt().max(1e-12)
+    });
+    let noise_pen = |f: &dyn Fn(&Vec3) -> Vec3, r: &mut Vec<f64>| {
+        if let (true, Some(m), Some(nr)) = (s.noise > 0.0 && s.noise.is_finite(), &nm, noise_ref) {
+            let l = m.lab_response(f);
+            let sc = NOISE_SCALE * s.noise * (used.len() as f64 / 24.0).sqrt() / nr;
+            for c in 0..3 {
+                r.extend([l[(0, c)] * sc, l[(1, c)] * sc * cw, l[(2, c)] * sc * cw]);
+            }
+        }
+    };
 
     // Before: the measured chart, exposure matched to the target.
     let de_before: Vec<f64> = (0..patches.len())
@@ -420,6 +530,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                 let full = to_xyz(&q[off..]) * gains_xyz(balance(t.as_ref()));
                 let mut r = resid_m(t.as_ref(), &full);
                 pull(&q[off..], &mut r);
+                noise_pen(&|x: &Vec3| full * tone_xyz(t.as_ref(), x), &mut r);
                 r
             }
         };
@@ -468,6 +579,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
             let res = |m: &Mat3| {
                 let mut r = resid_m(None, m);
                 penalty(m, &m_wb, &mut r);
+                noise_pen(&|x: &Vec3| m * x, &mut r);
                 r
             };
             let m = match lock(None) {
@@ -491,6 +603,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                 let (t, m) = unpack(p);
                 let mut r = resid_m(Some(&t), &m);
                 penalty(&m, &wb(Some(&t)), &mut r);
+                noise_pen(&|x: &Vec3| m * tone_xyz(Some(&t), x), &mut r);
                 if let Some((w, tt)) = lock(Some(&t)) {
                     // Strong penalty instead of an exact constraint (the curve moves w).
                     let d = lab(&(m * w / mids.len().max(2) as f64), &wn) - lab(&(tt / mids.len().max(2) as f64), &wn);
@@ -516,6 +629,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                     let res = |mm: &Mat3| {
                         let mut r = resid_m(Some(&t), mm);
                         penalty(mm, &m_wb, &mut r);
+                        noise_pen(&|x: &Vec3| mm * tone_xyz(Some(&t), x), &mut r);
                         r
                     };
                     let start = if (res(&base).iter().map(|v| v * v).sum::<f64>()) < 1e30 { base } else { m };
@@ -545,6 +659,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         mean_matrix: 0.0,
         tps_check: None,
         matrix_check: None,
+        noise: None,
         tone,
         exposure_ratio: ratio,
         neutral_gain: 0.0,
@@ -589,6 +704,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                 let scale = 20.0 * s.restraint * (used.len() as f64 / 24.0).sqrt();
                 r.extend((mx.matrix() - Mat3::identity()).iter().map(|v| v * scale));
             }
+            noise_pen(&|x: &Vec3| mx.apply_xyz(x), &mut r);
             r
         };
         let cost = |q: &[f64]| resid(q).iter().map(|v| v * v).sum::<f64>();
@@ -630,6 +746,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                 r.extend((c.mixer.matrix() - Mat3::identity()).iter().map(|v| v * scale));
                 r.push((c.saturation - 1.0) * scale);
             }
+            noise_pen(&|x: &Vec3| c.apply_xyz(x), &mut r);
             r
         };
         let idx = if mids.len() >= 2 { &mids } else { &neutrals };
@@ -759,6 +876,23 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     fit.neutral_after = mean(&de_after, &neutrals);
     fit.neutral_gain = g;
     fit.de_after = de_after;
+    if let Some(m) = &nm {
+        let (b0, c0, ch0) = m.measure(&still);
+        let (b, c, ch) = m.measure(&|x: &Vec3| fit.apply(x));
+        let w = wb(None);
+        let (wb_b, wb_c, wb_ch) = m.measure(&|x: &Vec3| w * x);
+        let rel = |a: f64, b: f64| if b > 1e-12 { a / b } else { f64::NAN };
+        fit.noise = Some(NoiseReport {
+            brightness: rel(b, b0),
+            colour: rel(c, c0),
+            channels: std::array::from_fn(|i| rel(ch[i], ch0[i])),
+            wb_brightness: rel(wb_b, b0),
+            wb_colour: rel(wb_c, c0),
+            wb_channels: std::array::from_fn(|i| rel(wb_ch[i], ch0[i])),
+            patch: m.patch,
+            measured: m.measured,
+        });
+    }
     // What a clipped pixel (equal R, G, B, linear DWG) comes out as.
     let w = davinci::xyz_to_dwg() * fit.apply(&(davinci::dwg_to_xyz() * Vec3::repeat(1.0)));
     if w.min() < 0.8 * w.max() {
@@ -879,7 +1013,7 @@ mod tests {
             .xyz_d65()
             .iter()
             .enumerate()
-            .map(|(i, t)| FitPatch { xyz: f(t), target: *t, neutral: i >= 18, used: true })
+            .map(|(i, t)| FitPatch { xyz: f(t), target: *t, neutral: i >= 18, used: true, noise: None })
             .collect()
     }
 
@@ -1119,6 +1253,41 @@ mod tests {
         // Linear: a mixer on linear values is a matrix in DWG.
         let lin = fit_chart(&p, &FitSettings { model: Model::Mixer, mixer_preserve: false, mixer_space: MixerSpace::Linear, ..Default::default() }).unwrap();
         assert!(lin.mean_after < free.mean_after + 3.0);
+    }
+
+    #[test]
+    fn noise_aware_fit_trades_accuracy_for_less_noise() {
+        // An underwater-like cast with a weak, noisy red (as in the file: red noise
+        // relative to its signal far above green's and blue's).
+        let mut p = patches(|t| cast() * t);
+        let gray = davinci::xyz_to_dwg() * p[21].xyz;
+        let noise = Mat3::from_diagonal(&Vec3::new(gray.x * 4e-4, gray.y * 1e-4, gray.z * 1e-4));
+        for q in p.iter_mut() {
+            q.noise = Some(noise);
+        }
+        for model in [Model::Matrix, Model::Nodes] {
+            let base = fit_chart(&p, &FitSettings { model, ..Default::default() }).unwrap();
+            let n0 = base.noise.unwrap();
+            assert!(n0.measured && n0.patch == 21);
+            // Off: exactly the plain fit.
+            let same = fit_chart(&p, &FitSettings { model, noise: 0.0, noise_colour: 0.1, ..Default::default() }).unwrap();
+            assert_eq!(same.de_after, base.de_after);
+            let mut last = (base.mean_after, n0.brightness, n0.colour);
+            for strength in [0.5, 1.5] {
+                let f = fit_chart(&p, &FitSettings { model, noise: strength, ..Default::default() }).unwrap();
+                let n = f.noise.unwrap();
+                // Less noise (weighted, as the fit sees it), a little more chart error.
+                assert!(n.brightness.powi(2) + 0.25 * n.colour.powi(2) < last.1.powi(2) + 0.25 * last.2.powi(2), "{model:?} {strength}: {n:?} vs {last:?}");
+                assert!(f.mean_after >= last.0 - 1e-9, "{model:?} {strength}");
+                last = (f.mean_after, n.brightness, n.colour);
+            }
+            // Colour noise counting less: less brightness noise.
+            let f = fit_chart(&p, &FitSettings { model, noise: 1.5, noise_colour: 0.1, ..Default::default() }).unwrap();
+            assert!(f.noise.unwrap().brightness < last.1, "{model:?}: {:?} vs {last:?}", f.noise);
+        }
+        // Without a measurement: assumed (variance ∝ level), still reported.
+        let f = fit_chart(&patches(|t| cast() * t), &FitSettings::default()).unwrap();
+        assert!(!f.noise.unwrap().measured);
     }
 
     #[test]

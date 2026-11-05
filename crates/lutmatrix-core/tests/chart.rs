@@ -451,6 +451,8 @@ fn every_setting_takes_effect() {
         (FitSettings { neutral_weight: 8.0, lock_neutral: false, ..fd }, "neutral weight"),
         (FitSettings { restraint: 0.6, ..fd }, "restraint"),
         (FitSettings { preserve_neutrals: true, ..fd }, "preserve neutrals"),
+        (FitSettings { noise: 1.0, ..fd }, "noise"),
+        (FitSettings { noise: 1.0, preserve_neutrals: true, ..fd }, "noise, preserve neutrals"),
     ] {
         assert!(!same_fit(&run(&with_fit(f)), &base), "{what}");
     }
@@ -468,6 +470,7 @@ fn every_setting_takes_effect() {
         (FitSettings { mixer_preserve: false, ..nd }, "nodes preserve"),
         (FitSettings { restraint: 0.6, ..nd }, "nodes restraint"),
         (FitSettings { exposure: Exposure::Keep, ..nd }, "nodes exposure"),
+        (FitSettings { noise: 1.0, ..nd }, "nodes noise"),
     ] {
         assert!(!same_fit(&run(&with_fit(f)), &n0), "{what}");
     }
@@ -478,13 +481,21 @@ fn every_setting_takes_effect() {
         (FitSettings { mixer_preserve: false, ..mx }, "mixer preserve"),
         (FitSettings { mixer_space: MixerSpace::Linear, ..mx }, "mixer space"),
         (FitSettings { restraint: 0.6, ..mx }, "mixer restraint"),
+        (FitSettings { noise: 1.5, ..mx }, "mixer noise"),
     ] {
         assert!(!same_fit(&run(&with_fit(f)), &m0), "{what}");
     }
+    let nz = FitSettings { noise: 1.0, ..fd };
+    let z0 = run(&with_fit(nz));
+    assert!(!same_fit(&run(&with_fit(FitSettings { noise_colour: 0.1, ..nz })), &z0), "noise colour");
+    assert!(same_fit(&run(&with_fit(FitSettings { noise_colour: 0.1, ..fd })), &base), "noise colour without noise");
+    // Every fit reports its noise, measured on the still.
+    let n = fit_of(&base).noise.expect("noise report");
+    assert!(n.measured && n.brightness.is_finite() && n.colour.is_finite() && n.channels.iter().all(|v| v.is_finite()), "{n:?}");
 
     // Settings that don't belong to a model leave it alone.
     for (f, base, what) in [
-        (FitSettings { preserve_neutrals: true, lock_neutral: false, restraint: 0.6, exposure: Exposure::Match, ..tps }, &t0, "TPS3D"),
+        (FitSettings { preserve_neutrals: true, lock_neutral: false, restraint: 0.6, exposure: Exposure::Match, noise: 1.0, noise_colour: 0.2, ..tps }, &t0, "TPS3D"),
         (FitSettings { preserve_neutrals: true, lock_neutral: false, tps_smoothing: 0.1, tps_patches: TpsPatches::Primaries, ..mx }, &m0, "mixer"),
         (FitSettings { mixer_preserve: false, mixer_space: MixerSpace::Linear, tps_smoothing: 0.1, ..fd }, &base, "matrix"),
     ] {
