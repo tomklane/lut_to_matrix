@@ -98,19 +98,26 @@ impl Mixer {
     }
 }
 
-/// Rec. 709 luma weights (ITU-R BT.709-6, item 3.2), what Saturation keeps fixed here.
-pub const REC709_LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
+/// Weights of the level Saturation keeps fixed in a linear node, as measured (below).
+pub const RESOLVE_SAT_WEIGHTS: [f64; 3] = [0.235, 0.573, 0.192];
+
+/// Saturation's working values from linear (sign kept): a square root. Measured (D47).
+pub fn sat_encode(v: f64) -> f64 {
+    v.signum() * v.abs().sqrt()
+}
 
 /// The user's two-node chain in Resolve (DECISIONS.md D47):
 /// 1. a node with its colour space gamma set to linear: Gain R, G, B (a multiply per
-///    channel), then Saturation `s` around the luma `Y` (out = Y + s·(in − Y)); Resolve's
-///    slider is 50·s (0 … 100, 50 = unity, 100 = double);
+///    channel), then Saturation `s`. Measured from Resolve stills (Saturation 50 and 100,
+///    same Gain): Resolve does it on the square root of the linear values, around a
+///    weighted level `Y = w · √g`, `out = max(Y + s·(√g − Y), 0)²`; the slider is 50·s
+///    (0 … 100, 50 = unity, 100 = double);
 /// 2. a node in DWG/DI with the RGB Mixer ([`Mixer`], normally on DI values).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct NodeChain {
     pub gains: [f64; 3],
     pub saturation: f64,
-    /// The weights Saturation keeps fixed (assumed Rec. 709).
+    /// The weights of the level Saturation keeps fixed ([`RESOLVE_SAT_WEIGHTS`]).
     pub luma: [f64; 3],
     pub mixer: Mixer,
 }
@@ -118,9 +125,9 @@ pub struct NodeChain {
 impl NodeChain {
     /// Node 1 on linear DWG.
     pub fn node1(&self, d: &Vec3) -> Vec3 {
-        let g = Vec3::new(d.x * self.gains[0], d.y * self.gains[1], d.z * self.gains[2]);
+        let g = Vec3::new(d.x * self.gains[0], d.y * self.gains[1], d.z * self.gains[2]).map(sat_encode);
         let y = self.luma[0] * g.x + self.luma[1] * g.y + self.luma[2] * g.z;
-        Vec3::repeat(y) + (g - Vec3::repeat(y)) * self.saturation
+        (Vec3::repeat(y) + (g - Vec3::repeat(y)) * self.saturation).map(|v| v.max(0.0).powi(2))
     }
 
     /// Both nodes, CIE XYZ (D65) in and out.
@@ -174,15 +181,27 @@ mod tests {
     }
 
     #[test]
-    fn node_chain_saturation_keeps_luma_and_grays() {
+    fn node_chain_saturation_on_square_roots() {
+        assert!((RESOLVE_SAT_WEIGHTS.iter().sum::<f64>() - 1.0).abs() < 1e-12);
         let id = Mixer::from_params(&[0.0; 6], MixerSpace::Di, true);
-        let c = NodeChain { gains: [1.0; 3], saturation: 1.6, luma: REC709_LUMA, mixer: id };
+        let c = NodeChain { gains: [1.0; 3], saturation: 1.6, luma: RESOLVE_SAT_WEIGHTS, mixer: id };
         let d = Vec3::new(0.3, 0.12, 0.05);
         let o = c.node1(&d);
-        let y = |v: &Vec3| REC709_LUMA[0] * v.x + REC709_LUMA[1] * v.y + REC709_LUMA[2] * v.z;
-        assert!((y(&o) - y(&d)).abs() < 1e-12);
+        // The weighted level of the square roots is kept; their spread grows by s.
+        let w = |v: &Vec3| {
+            let r = v.map(sat_encode);
+            RESOLVE_SAT_WEIGHTS[0] * r.x + RESOLVE_SAT_WEIGHTS[1] * r.y + RESOLVE_SAT_WEIGHTS[2] * r.z
+        };
+        assert!((w(&o) - w(&d)).abs() < 1e-12);
+        let (rd, ro) = (d.map(sat_encode), o.map(sat_encode));
+        assert!(((ro.x - ro.y) - 1.6 * (rd.x - rd.y)).abs() < 1e-12);
+        // Grays stay; unity is a no-op; nothing goes below 0.
         let g = Vec3::repeat(0.4);
         assert!((c.node1(&g) - g).norm() < 1e-12);
+        let one = NodeChain { saturation: 1.0, ..c };
+        assert!((one.node1(&d) - d).norm() < 1e-12);
+        let two = NodeChain { saturation: 2.0, ..c };
+        assert!(two.node1(&Vec3::new(0.0, 0.0, 0.5)).iter().all(|v| *v >= 0.0));
         assert_eq!(c.saturation_slider(), 80.0);
     }
 }

@@ -32,7 +32,7 @@ use crate::math::{whites, Mat3, Vec3};
 use crate::spaces::curves::di_encode;
 use crate::spaces::davinci;
 
-use super::mixer::{Mixer, MixerSpace, NodeChain, REC709_LUMA};
+use super::mixer::{Mixer, MixerSpace, NodeChain, RESOLVE_SAT_WEIGHTS};
 use super::tps::{dedupe, fit_tps, identity_anchors, GrayCurve, Tps, TpsPoint};
 
 /// What happens to the chart's exposure.
@@ -613,7 +613,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         let unpack = |q: &[f64]| NodeChain {
             gains: [q[0].exp(), q[1].exp(), q[2].exp()],
             saturation: q[3],
-            luma: REC709_LUMA,
+            luma: RESOLVE_SAT_WEIGHTS,
             mixer: Mixer::from_params(&q[4..], space, pl),
         };
         let resid = |q: &[f64]| -> Vec<f64> {
@@ -1123,11 +1123,11 @@ mod tests {
 
     #[test]
     fn node_chain_recovers_gain_saturation_and_mixer() {
-        use crate::chart::mixer::{Mixer, MixerSpace, NodeChain, REC709_LUMA};
+        use crate::chart::mixer::{Mixer, MixerSpace, NodeChain, RESOLVE_SAT_WEIGHTS};
         // A camera look made of the inverse chain: the fit finds a chain that undoes it.
         let look = |t: &Vec3| -> Vec3 {
             let m = Mixer::from_params(&[0.05, -0.03, 0.04, 0.02, -0.02, 0.06], MixerSpace::Di, true);
-            let c = NodeChain { gains: [0.5, 0.9, 1.1], saturation: 0.8, luma: REC709_LUMA, mixer: m };
+            let c = NodeChain { gains: [0.5, 0.9, 1.1], saturation: 0.8, luma: RESOLVE_SAT_WEIGHTS, mixer: m };
             c.apply_xyz(t)
         };
         let p = patches(look);
