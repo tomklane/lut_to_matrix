@@ -28,6 +28,7 @@
     padding: 2px;
     gap: 2px;
     background: color-mix(in srgb, var(--label) 7%, transparent);
+    border: 0.5px solid var(--border);
     border-radius: 7px;
   }
   .seg.disabled {
@@ -46,10 +47,14 @@
     white-space: nowrap;
     transition: background 0.15s var(--ease), box-shadow 0.15s var(--ease);
   }
+  button:not(.on):not(:disabled):hover {
+    background: color-mix(in srgb, var(--label) 8%, transparent);
+  }
   button.on {
-    background: var(--control);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
-    font-weight: 500;
+    background: var(--accent);
+    color: var(--accent-fg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    font-weight: 600;
   }
   button:focus-visible {
     outline: 3px solid var(--accent-soft);

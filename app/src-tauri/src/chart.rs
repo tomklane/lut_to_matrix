@@ -227,6 +227,9 @@ pub fn chart_export_dctl(dctl_path: String, state: State<ChartState>) -> CmdResu
 pub fn chart_matrix_text(state: State<ChartState>) -> CmdResult<String> {
     let guard = state.0.analysis.lock().unwrap();
     let f = guard.as_ref().and_then(|a| a.fit.as_ref()).ok_or("no correction yet")?;
+    if let Some(m) = &f.mixer {
+        return Ok(m.text());
+    }
     let m = &f.m_xyz;
     let mut s = (0..3).map(|r| format!("{:.10} {:.10} {:.10}", m[(r, 0)], m[(r, 1)], m[(r, 2)])).collect::<Vec<_>>().join("\n");
     if let Some(t) = &f.tone {

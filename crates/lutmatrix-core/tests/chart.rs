@@ -7,6 +7,7 @@ use lutmatrix_core::chart::detect::{find_lattice, homography, Orientation};
 use lutmatrix_core::chart::encoding::{StillGamut, StillSpace};
 use lutmatrix_core::chart::fit::{Exposure, Model, Tone};
 use lutmatrix_core::chart::highlights::{ClipSource, HighlightSettings};
+use lutmatrix_core::chart::mixer::MixerSpace;
 use lutmatrix_core::chart::image::ChartImage;
 use lutmatrix_core::chart::odrt::{fit_opendrt_chart, OdrtChartSettings};
 use lutmatrix_core::chart::reference::ChartEdition;
@@ -248,12 +249,17 @@ fn chart_dctl_compiles_and_matches() {
         (Model::Matrix, false, false, true, true),
         (Model::MatrixTps, false, true, true, false),
         (Model::MatrixTps, true, false, false, false),
+        (Model::Mixer, true, true, true, false),
+        (Model::Mixer, false, false, true, false),
     ];
     for (model, preserve, protect, wb, tps) in cases {
         let s = ChartSettings {
             fit: lutmatrix_core::chart::fit::FitSettings {
                 model: if tps { Model::Tps } else { model },
                 preserve_neutrals: preserve,
+                // (for the mixer: Preserve Luminance, and linear for the free one)
+                mixer_preserve: preserve,
+                mixer_space: if preserve { MixerSpace::Di } else { MixerSpace::Linear },
                 ..Default::default()
             },
             // A clip inside the tested codes (up to 0.7), so the protection is exercised.
@@ -278,10 +284,12 @@ fn chart_dctl_compiles_and_matches() {
         let src = a.dctl("2026-01-01").unwrap();
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone && !tps);
-        assert_eq!(src.contains("M_XYZ"), !tps);
+        let mixer = model == Model::Mixer;
+        assert_eq!(src.contains("M_XYZ"), !tps && !mixer);
+        assert_eq!(src.contains("MIX_RR"), mixer);
         assert_eq!(src.contains("TPS_C["), tps || model == Model::MatrixTps);
         assert_eq!(src.contains("p_HlClip"), protect);
-        assert_eq!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))), !tps);
+        assert_eq!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))), !tps && !mixer);
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
         let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}-{tps}", std::process::id()));
@@ -356,10 +364,14 @@ fn corrected_preview_differs_and_opendrt_display_works() {
     // A strong cast: the corrected preview's chart is far from the uncorrected one.
     let tint = dwg_to_xyz() * Mat3::from_diagonal(&Vec3::new(0.45, 0.85, 1.1)) * xyz_to_dwg();
     let img = di_still(UPSIDE_DOWN, tint * cam(), 0.5);
-    let a = analyze(&img, None, &ChartSettings::default()).unwrap();
+    let lat = find_lattice(&img).unwrap();
+    let decode = |jpg: &[u8]| ::image::load_from_memory(jpg).unwrap().to_rgb8();
+    // Every model, both displays.
+    for model in [Model::Matrix, Model::MatrixTone, Model::Tps, Model::MatrixTps, Model::Mixer] {
+    let s = ChartSettings { fit: lutmatrix_core::chart::fit::FitSettings { model, mixer_preserve: false, ..Default::default() }, ..Default::default() };
+    let a = analyze(&img, Some(&lat), &s).unwrap();
     let fit = a.fit.as_ref().unwrap();
     let corr = PreviewCorrection { fit, highlights: &a.highlights, white_balance: true };
-    let decode = |jpg: &[u8]| ::image::load_from_memory(jpg).unwrap().to_rgb8();
     for display in [PreviewDisplay::Simple, PreviewDisplay::OpenDrt { look: 0, tonescale: 0 }] {
         let (b, w, h) = preview_jpeg_with(&img, &a.space, fit.exposure_ratio, None, display, 400);
         let (c, w2, h2) = preview_jpeg_with(&img, &a.space, fit.exposure_ratio, Some(corr), display, 400);
@@ -370,7 +382,8 @@ fn corrected_preview_differs_and_opendrt_display_works() {
             let (r, bl) = im.pixels().fold((0.0, 0.0), |(r, bl), p| (r + p[0] as f64, bl + p[2] as f64));
             r / bl.max(1.0)
         };
-        assert!(rb(&c) > rb(&b) * 1.15, "{display:?}: {} vs {}", rb(&c), rb(&b));
+        assert!(rb(&c) > rb(&b) * 1.15, "{model:?} {display:?}: {} vs {}", rb(&c), rb(&b));
+    }
     }
 }
 
@@ -382,3 +395,131 @@ fn space_override_is_used() {
     assert_eq!(a.space, sp);
     assert!(!a.space_detected);
 }
+
+// ---------------------------------------------------------------------------
+// Audit: every setting the app sends changes the result, and the ones that don't
+// belong to a model leave it alone.
+// ---------------------------------------------------------------------------
+#[test]
+fn every_setting_takes_effect() {
+    use lutmatrix_core::chart::fit::{Exposure, FitSettings, TpsPatches};
+    let tint = dwg_to_xyz() * Mat3::from_diagonal(&Vec3::new(0.55, 0.85, 1.1)) * xyz_to_dwg();
+    let img = di_still(UPSIDE_DOWN, tint * cam(), 0.5);
+    let lat = find_lattice(&img).unwrap();
+    let run = |s: &ChartSettings| analyze(&img, Some(&lat), s).unwrap();
+    let base_s = ChartSettings::default();
+    let base = run(&base_s);
+    let fit_of = |a: &lutmatrix_core::chart::ChartAnalysis| a.fit.clone().unwrap();
+    let dctl = |a: &lutmatrix_core::chart::ChartAnalysis| a.dctl("2026-01-01").unwrap();
+    let same_fit = |a: &lutmatrix_core::chart::ChartAnalysis, b: &lutmatrix_core::chart::ChartAnalysis| {
+        let (x, y) = (fit_of(a), fit_of(b));
+        (x.m_xyz - y.m_xyz).abs().max() < 1e-12 && x.de_after == y.de_after && x.tps == y.tps && x.mixer == y.mixer
+    };
+    let with_fit = |f: FitSettings| ChartSettings { fit: f, ..ChartSettings::default() };
+    let fd = FitSettings::default();
+
+    // Still and chart.
+    let a = run(&ChartSettings { edition: ChartEdition::Before2014, ..ChartSettings::default() });
+    assert!(a.target_name != base.target_name && !same_fit(&a, &base), "edition");
+    let sp = StillSpace { curve: LogCurve::AcesCct, gamut: StillGamut::AcesAp1 };
+    assert_eq!(run(&ChartSettings { space: Some(sp), ..ChartSettings::default() }).space, sp, "space override");
+    let a = run(&ChartSettings { orientation: Some(Orientation::Rot0), ..ChartSettings::default() });
+    assert_eq!(a.placement.orientation, Orientation::Rot0, "orientation");
+    let a = run(&ChartSettings { corners: Some(UPSIDE_DOWN), ..ChartSettings::default() });
+    assert_eq!(a.placement_source, "manual", "corners");
+    let a = run(&ChartSettings { sample_size: 0.2, ..ChartSettings::default() });
+    assert!(a.patches[3].sample.n < base.patches[3].sample.n, "sample size");
+    let a = run(&ChartSettings { exclude: vec![4], ..ChartSettings::default() });
+    assert!(!a.patches[4].used && a.patches[4].excluded && fit_of(&a).used == fit_of(&base).used - 1, "exclude");
+    let a = run(&ChartSettings { mirrors: true, ..ChartSettings::default() });
+    assert!(a.alternatives.iter().any(|p| p.orientation.mirrored()), "mirrors");
+    assert!(!base.alternatives.iter().any(|p| p.orientation.mirrored()));
+    let hero = run(&ChartSettings::default()).as_target();
+    let a = run(&ChartSettings { target: hero, ..ChartSettings::default() });
+    assert!(a.target_name.starts_with("chart in") && fit_of(&a).mean_after < 0.05, "target chart");
+
+    // Fit settings.
+    for m in [Model::MatrixTone, Model::Tps, Model::MatrixTps, Model::Mixer] {
+        assert!(!same_fit(&run(&with_fit(FitSettings { model: m, ..fd })), &base), "model {m:?}");
+    }
+    let a = run(&with_fit(FitSettings { exposure: Exposure::Keep, ..fd }));
+    assert!((fit_of(&a).neutral_gain - 1.0).abs() < 0.01 && (fit_of(&base).neutral_gain - 1.0).abs() > 0.1, "exposure");
+    for (f, what) in [
+        (FitSettings { lock_neutral: false, ..fd }, "lock neutral"),
+        (FitSettings { neutral_weight: 8.0, lock_neutral: false, ..fd }, "neutral weight"),
+        (FitSettings { restraint: 0.6, ..fd }, "restraint"),
+        (FitSettings { preserve_neutrals: true, ..fd }, "preserve neutrals"),
+    ] {
+        assert!(!same_fit(&run(&with_fit(f)), &base), "{what}");
+    }
+    let tps = FitSettings { model: Model::Tps, ..fd };
+    let t0 = run(&with_fit(tps));
+    for (f, what) in [
+        (FitSettings { tps_patches: TpsPatches::Primaries, ..tps }, "tps patches"),
+        (FitSettings { tps_smoothing: 0.02, ..tps }, "tps smoothing"),
+    ] {
+        assert!(!same_fit(&run(&with_fit(f)), &t0), "{what}");
+    }
+    let mx = FitSettings { model: Model::Mixer, ..fd };
+    let m0 = run(&with_fit(mx));
+    for (f, what) in [
+        (FitSettings { mixer_preserve: false, ..mx }, "mixer preserve"),
+        (FitSettings { mixer_space: MixerSpace::Linear, ..mx }, "mixer space"),
+        (FitSettings { restraint: 0.6, ..mx }, "mixer restraint"),
+    ] {
+        assert!(!same_fit(&run(&with_fit(f)), &m0), "{what}");
+    }
+
+    // Settings that don't belong to a model leave it alone.
+    for (f, base, what) in [
+        (FitSettings { preserve_neutrals: true, lock_neutral: false, restraint: 0.6, exposure: Exposure::Match, ..tps }, &t0, "TPS3D"),
+        (FitSettings { preserve_neutrals: true, lock_neutral: false, tps_smoothing: 0.1, tps_patches: TpsPatches::Primaries, ..mx }, &m0, "mixer"),
+        (FitSettings { mixer_preserve: false, mixer_space: MixerSpace::Linear, tps_smoothing: 0.1, ..fd }, &base, "matrix"),
+    ] {
+        assert!(same_fit(&run(&with_fit(f)), base), "{what} changed by another model's settings");
+    }
+
+    // DCTL options.
+    let hl = |h: HighlightSettings| dctl(&run(&ChartSettings { highlights: h, ..ChartSettings::default() }));
+    let on = HighlightSettings { enabled: true, ..Default::default() };
+    assert!(hl(on).contains("p_HlClip") && !dctl(&base).contains("p_HlClip"), "highlights");
+    assert!(hl(HighlightSettings { clip_di: Some(0.61), ..on }).contains("Highlight Clip DI, DCTLUI_SLIDER_FLOAT, 0.6100"), "clip");
+    assert!(hl(HighlightSettings { softness: 2.0, ..on }).contains("Highlight Softness, DCTLUI_SLIDER_FLOAT, 2.0000"), "softness");
+    assert!(hl(HighlightSettings { strength: 0.5, ..on }).contains("Highlight Protection, DCTLUI_SLIDER_FLOAT, 0.5000"), "strength");
+    let wb = dctl(&run(&ChartSettings { white_balance: false, ..ChartSettings::default() }));
+    assert!(wb.contains("WB Done In Raw, DCTLUI_CHECK_BOX, 1") && dctl(&base).contains("WB Done In Raw, DCTLUI_CHECK_BOX, 0"), "white balance");
+}
+
+/// The app sends ChartSettings as JSON; serde ignores unknown keys, so a misspelt key
+/// would silently do nothing. The keys the app's defaults use must all exist here.
+#[test]
+fn app_settings_keys_match() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../app/src/lib/api.ts")).unwrap();
+    let rust = serde_json::to_value(ChartSettings::default()).unwrap();
+    let keys = |v: &serde_json::Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
+    // Keys of an `export interface Name { ... }` block.
+    let iface = |name: &str| -> Vec<String> {
+        let start = src.find(&format!("export interface {name} {{")).unwrap_or_else(|| panic!("{name}"));
+        let body = &src[start..start + src[start..].find("\n}").unwrap()];
+        body.lines()
+            .skip(1)
+            .filter_map(|l| {
+                let l = l.trim();
+                (!l.starts_with("/*") && !l.starts_with('*') && !l.starts_with("//")).then(|| l.split(':').next().unwrap().trim_end_matches('?').to_string())
+            })
+            .filter(|k| !k.is_empty())
+            .collect()
+    };
+    let check = |ts: Vec<String>, rs: Vec<String>, what: &str| {
+        for k in &ts {
+            assert!(rs.contains(k), "{what}: the app sends '{k}', which the core doesn't know");
+        }
+    };
+    check(iface("ChartSettings"), keys(&rust), "ChartSettings");
+    check(iface("ChartFitSettings"), keys(&rust["fit"]), "FitSettings");
+    check(iface("HighlightSettings"), keys(&rust["highlights"]), "HighlightSettings");
+    check(iface("OdrtChartSettings"), keys(&serde_json::to_value(OdrtChartSettings::default()).unwrap()), "OdrtChartSettings");
+    // And the parser found them (not an empty pass).
+    assert!(iface("ChartFitSettings").len() >= 10, "{:?}", iface("ChartFitSettings"));
+}
+

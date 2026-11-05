@@ -6,6 +6,22 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-05
+
+### Added
+- **RGB Mixer** chart model (DECISIONS D46): fits values for Resolve's RGB Mixer, laid
+  out like its Red / Green / Blue Output sliders, with *Preserve Luminance* (each
+  output's sliders add up to 1) and the node working on DI log or linear values. Copy
+  Values, or export it as a DCTL. CLI: `--model mixer`, `--mixer-free`, `--mixer-linear`.
+- **Adjust the chart placement** after detection: drag the four blue corner handles and
+  the patches follow.
+
+### Fixed
+- The chart image can be dragged around (pan) and patches clicked to skip them again.
+- Selected buttons in segmented controls are now clearly highlighted.
+- Preserve neutrals no longer affects models without a matrix.
+- Shorter, plainer explanations throughout the Chart view and its notes.
+
 ## [0.8.0] - 2026-10-31
 
 ### Added
@@ -258,7 +274,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.5.0...v0.6.0

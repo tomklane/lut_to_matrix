@@ -64,7 +64,9 @@ Tick *WB Done In Raw* in the DCTL to turn the white balance part of the correcti
 for footage white-balanced in the raw decode; *Preserve neutrals* keeps the rest of the
 correction from tinting white. *TPS3D* replaces the matrix with a colour-only gray
 balance and thin-plate spline (exposure and contrast stay as shot); *Matrix + TPS3D* runs
-it after the matrix. Compare the cross-check with the matrix's before trusting either. Under the
+it after the matrix. Compare the cross-check with the matrix's before trusting either.
+*RGB Mixer* gives values to type into Resolve's RGB Mixer. Drag the blue corner handles
+to fine-tune where the patches are sampled. Under the
 image, *Before / After / Split* shows the
 correction as the DCTL applies it (plain or through OpenDRT), and *Other Still…* shows
 it on another still from the same camera. Export stills as half-float
@@ -198,6 +200,7 @@ lutmatrix chart still.tif --protect-highlights --dctl c.dctl # clipped areas go 
 lutmatrix chart still.tif --preserve-neutrals --dctl c.dctl  # matrix after the white balance keeps equal RGB equal
 lutmatrix chart still.tif --model tps --dctl c.dctl          # TPS3D: colour-only gray balance + thin-plate spline, no matrix
 lutmatrix chart still.tif --model matrix-tps --dctl c.dctl   # the matrix, then TPS3D (colour only)
+lutmatrix chart still.tif --model mixer                      # values for Resolve's RGB Mixer (Preserve Luminance)
 ```
 
 ### Batch: every negative × every print, plus full LUTs

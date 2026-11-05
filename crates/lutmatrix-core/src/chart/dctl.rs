@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 
 use super::fit::{ChartFit, Model, TONE_TOE};
 use super::highlights::{ClipSource, Highlights, CLIP_DI_RANGE, SOFTNESS_RANGE};
+use super::mixer::{Mixer, MixerSpace};
 use super::tps::Tps;
 use crate::dctl::{c, lit, matrix_fn};
 use crate::spaces::curves::{DI_A, DI_B, DI_C, DI_LIN_CUT, DI_LOG_CUT, DI_M};
@@ -30,6 +31,10 @@ pub struct ChartMeta {
 pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &ChartMeta) -> String {
     if let (Some(t), Model::Tps) = (&fit.tps, fit.settings.model) {
         return tps_dctl(t, fit.gray_dwg, hl, meta);
+    }
+    if let Some(m) = &fit.mixer {
+        let white = super::highlights::Highlights::camera_white(fit, true);
+        return mixer_dctl(m, [white.x, white.y, white.z], hl, meta);
     }
     let mut s = String::new();
     let w = &mut s;
@@ -302,6 +307,85 @@ fn clip_source(hl: &Highlights) -> String {
         ClipSource::Brightest => "the chart still's brightest value (it doesn't clip): set it to where the footage clips".to_string(),
         ClipSource::Default => "a typical value (the still says nothing): set it to where the footage clips".to_string(),
     }
+}
+
+/// The RGB Mixer DCTL: Resolve's RGB Mixer with the fitted values (D46).
+fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> String {
+    let mut s = String::new();
+    let w = &mut s;
+    header(w, "chart correction (RGB Mixer, as in DaVinci Resolve)", meta);
+    let on = match m.space {
+        MixerSpace::Di => "DaVinci Intermediate values (a node in a DWG/DI timeline)",
+        MixerSpace::Linear => "linear DWG values (the node's colour space set to linear)",
+    };
+    let _ = writeln!(w, "// Pipeline: DI -> {}RGB Mixer on {on} -> blended", if hl.enabled { "highlight protection (linear DWG) -> " } else { "" });
+    let _ = writeln!(w, "// with the input by 'Amount' -> DI.");
+    let _ = writeln!(w, "//");
+    let _ = writeln!(w, "// The same values in Resolve's RGB Mixer (Preserve Luminance {}):", if m.preserve_luminance { "on" } else { "off" });
+    for line in m.text().lines() {
+        let _ = writeln!(w, "//   {line}");
+    }
+    if hl.enabled {
+        let _ = writeln!(w, "//");
+        let _ = writeln!(w, "// Highlight protection: each channel within 'Highlight Softness' stops of");
+        let _ = writeln!(w, "// 'Highlight Clip DI' is raised towards the camera's white, so clipped areas come");
+        let _ = writeln!(w, "// out the colour the mixer gives white.");
+        let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&clip_source(hl)));
+    }
+    let _ = writeln!(w, "//");
+    let _ = writeln!(w, "// The DaVinci Intermediate constants are from Blackmagic Design, \"DaVinci Wide");
+    let _ = writeln!(w, "// Gamut Intermediate\" v1.1 (2021-07-31).");
+    let _ = writeln!(w, "// ============================================================================");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_Amount, Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)");
+    if hl.enabled {
+        highlight_params(w, hl);
+    }
+    let _ = writeln!(w);
+    di_functions(w);
+    if hl.enabled {
+        let _ = writeln!(w, "// The camera's white in linear DWG (green = 1).");
+        let _ = writeln!(w, "#define CAM_WHITE_R {}", lit(white[0]));
+        let _ = writeln!(w, "#define CAM_WHITE_B {}", lit(white[2]));
+        let _ = writeln!(w);
+        rebuild_fn(w);
+    }
+    for (r, ch) in ["R", "G", "B"].iter().enumerate() {
+        for (k, inp) in ["R", "G", "B"].iter().enumerate() {
+            let _ = writeln!(w, "#define MIX_{ch}{inp}      {}", lit(m.rows[r][k]));
+        }
+    }
+    let _ = writeln!(w);
+    let _ = writeln!(w, "__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    float3 dwg = make_float3(di_to_linear(p_R), di_to_linear(p_G), di_to_linear(p_B));");
+    if hl.enabled {
+        let _ = writeln!(w, "    // Highlight protection: clipped channels towards the camera's white (linear DWG)");
+        let _ = writeln!(w, "    float sc = _fmaxf(dwg.x / CAM_WHITE_R, _fmaxf(dwg.y, dwg.z / CAM_WHITE_B));");
+        let _ = writeln!(w, "    dwg = make_float3(rebuild(dwg.x, sc * CAM_WHITE_R, p_HlProtect, p_HlClip, p_HlSoft),");
+        let _ = writeln!(w, "                      rebuild(dwg.y, sc, p_HlProtect, p_HlClip, p_HlSoft),");
+        let _ = writeln!(w, "                      rebuild(dwg.z, sc * CAM_WHITE_B, p_HlProtect, p_HlClip, p_HlSoft));");
+    }
+    match m.space {
+        MixerSpace::Di => {
+            let _ = writeln!(w, "    float3 v = make_float3(linear_to_di(dwg.x), linear_to_di(dwg.y), linear_to_di(dwg.z));");
+        }
+        MixerSpace::Linear => {
+            let _ = writeln!(w, "    float3 v = dwg;");
+        }
+    }
+    let _ = writeln!(w, "    // The RGB Mixer");
+    let _ = writeln!(w, "    float3 o = make_float3(MIX_RR * v.x + MIX_RG * v.y + MIX_RB * v.z,");
+    let _ = writeln!(w, "                           MIX_GR * v.x + MIX_GG * v.y + MIX_GB * v.z,");
+    let _ = writeln!(w, "                           MIX_BR * v.x + MIX_BG * v.y + MIX_BB * v.z);");
+    if m.space == MixerSpace::Linear {
+        let _ = writeln!(w, "    o = make_float3(linear_to_di(o.x), linear_to_di(o.y), linear_to_di(o.z));");
+    }
+    let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
+    let _ = writeln!(w, "    return make_float3(p_R + (o.x - p_R) * p_Amount, p_G + (o.y - p_G) * p_Amount, p_B + (o.z - p_B) * p_Amount);");
+    let _ = writeln!(w, "}}");
+    debug_assert!(s.is_ascii());
+    s
 }
 
 /// The TPS3D DCTL: the spline alone, no matrix (D44).

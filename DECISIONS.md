@@ -692,3 +692,26 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   leave-one-out: Matrix + TPS3D 6.2 ΔE vs matrix 7.3 (TPS3D alone 10.6); 9-patch still
   12.7 vs 22.9.
 
+## D46 — RGB Mixer model; viewer interaction; settings audit (user request 2026-11-05)
+- *RGB Mixer* model mimics Resolve's RGB Mixer: a 3×3 on the node's values, rows = Red /
+  Green / Blue Output, defaults identity. *Preserve Luminance* (default on, as Resolve):
+  raising one slider lowers the other two of that output by the same total (Resolve 18.6
+  Reference Manual, "RGB Mixer"), i.e. each row sums to 1; fitted as the 6 off-diagonal
+  values. The node works on DI log values (a normal node in a DWG/DI timeline) or on
+  linear DWG (node colour space set to linear). Fitted by Levenberg–Marquardt on ΔLab
+  (neutrals weighted), seeded by least squares in the node's values and by identity;
+  Restraint pulls towards identity. No exposure control (as in Resolve: use Offset), so
+  the fit keeps the still's exposure. A note flags values beyond ±2 (we couldn't find
+  Resolve's slider range documented). The app shows the nine values laid out like
+  Resolve's panel; Copy Values copies them; the DCTL applies them the same way.
+- Settings audit: a test changes every setting the app sends and checks it changes the
+  result, and that settings belonging to other models don't (it found Preserve neutrals
+  putting a matrix in front of the mixer; now `Model::has_matrix` gates it). Another
+  test checks every key in the app's settings types exists in the core's (serde would
+  ignore a misspelt one), and the corrected preview is checked for every model.
+- Viewer: drag pans, click a patch to skip it (a click is a press without movement), and
+  four handles at patches 1, 6, 24 and 19 fine-tune the placement after detection: the
+  patch grid follows live (homography in the front end), releasing sets the corners (a
+  manual placement; *Use detection* goes back). In Split view, dragging near the line
+  moves it.
+

@@ -44,6 +44,8 @@ let presets: PresetRow[] = params.has("empty")
     ];
 
 export async function mockInvoke(cmd: string, args: Record<string, any> = {}): Promise<unknown> {
+  // For UI tests: the last arguments of each command.
+  ((globalThis as any).__mockCalls ??= {})[cmd] = args;
   switch (cmd) {
     case "app_info":
       return { version: "0.1.0", os: params.get("os") ?? "macos", data_dir: "/Users/you/Library/Application Support/LUT Matrix", presets_dir: "/Users/you/Library/Application Support/LUT Matrix/opendrt-presets" };

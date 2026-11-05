@@ -16,6 +16,7 @@ pub mod encoding;
 pub mod fit;
 pub mod highlights;
 pub mod image;
+pub mod mixer;
 pub mod odrt;
 pub mod reference;
 pub mod tps;
@@ -279,12 +280,12 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
         }
         if alts.len() > 1 && alts[1].score < alts[0].score * 1.25 && s.orientation.is_none() {
             notes.push(format!(
-                "orientation is uncertain ({} fits almost as well); check the numbers on the patches",
+                "the chart's orientation is uncertain ({} fits almost as well): check the patch numbers",
                 alts[1].orientation.label()
             ));
         }
         if lat.members.len() < 12 {
-            notes.push(format!("only {} patches were found directly; check the placement", lat.members.len()));
+            notes.push(format!("only {} patches were found: check the placement", lat.members.len()));
         }
         (scored[0].1, "detected", lat.members.len(), alts)
     };
@@ -331,10 +332,10 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
     let clipped = (0..24).filter(|&i| sm.low[i].iter().chain(&sm.high[i]).any(|b| *b)).count();
     if clipped > 0 {
         notes.push(format!(
-            "{clipped} patch{} clipped in the file and left out{}",
-            if clipped == 1 { " is" } else { "es are" },
+            "{clipped} clipped patch{} left out{}",
+            if clipped == 1 { "" } else { "es" },
             if !img.info.float && (0..24).any(|i| sm.low[i].iter().any(|b| *b)) {
-                "; an integer file can't store values below 0: export a half-float EXR to keep them"
+                " (integer files can't hold values below 0: a half-float EXR keeps them)"
             } else {
                 ""
             }
@@ -430,6 +431,14 @@ impl ChartAnalysis {
             model: match f.settings.model {
                 fit::Model::Matrix => "3x3 matrix in XYZ".to_string(),
                 fit::Model::MatrixTone => "per-channel tone curve in linear DWG + 3x3 matrix in XYZ".to_string(),
+                fit::Model::Mixer => format!(
+                    "RGB Mixer on {} values{}",
+                    match f.settings.mixer_space {
+                        mixer::MixerSpace::Di => "DaVinci Intermediate",
+                        mixer::MixerSpace::Linear => "linear DWG",
+                    },
+                    if f.settings.mixer_preserve { ", Preserve Luminance" } else { "" }
+                ),
                 fit::Model::Tps | fit::Model::MatrixTps => format!(
                     "{}TPS3D in DI DWG, colour only ({}, smoothing {}), gray-corrected",
                     if f.settings.model == fit::Model::MatrixTps { "3x3 matrix in XYZ, then " } else { "no matrix: " },
@@ -439,7 +448,7 @@ impl ChartAnalysis {
                     },
                     f.settings.tps_smoothing
                 ),
-            } + if f.settings.model == fit::Model::Tps {
+            } + if matches!(f.settings.model, fit::Model::Tps | fit::Model::Mixer) {
                 ""
             } else if f.settings.preserve_neutrals {
                 ", neutrals preserved after the white balance (equal RGB stays equal)"

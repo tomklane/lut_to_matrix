@@ -39,24 +39,121 @@
   /* ---------- before / after ---------- */
 
   let split = $state(0.5);
-  let dragging = false;
-  function splitAt(e: PointerEvent) {
-    const p = toImage(e);
-    if (p) split = Math.min(1, Math.max(0, p[0] / imgW));
+
+  /* ---------- pointer: pan, split line, corner handles, patch clicks ---------- */
+
+  // Corner handles: the centres of patches 1, 6, 24 and 19 (what `corners` holds).
+  const CORNER_PATCHES = [0, 5, 23, 18];
+  // While a corner is dragged (and until the new analysis arrives): the four points.
+  let liveCorners = $state<[number, number][] | null>(null);
+  $effect(() => {
+    void a;
+    liveCorners = null;
+  });
+  const cornerPts = $derived(liveCorners ?? (a ? CORNER_PATCHES.map((i) => a.patches[i].centre as [number, number]) : null));
+  // The patch squares for the live corners (homography from chart to image coordinates).
+  const liveBoxes = $derived.by(() => {
+    if (!liveCorners) return null;
+    const h = homography([[0, 0], [5, 0], [5, 3], [0, 3]], liveCorners);
+    if (!h) return null;
+    const s = app.chart.sample_size / 2;
+    return Array.from({ length: 24 }, (_, i) => {
+      const [c, r] = [i % 6, Math.floor(i / 6)];
+      return [[c - s, r - s], [c + s, r - s], [c + s, r + s], [c - s, r + s]].map(([u, v]) => project(h, u, v));
+    });
+  });
+
+  type Drag =
+    | { kind: "pan"; sx: number; sy: number; box: [number, number, number, number]; moved: boolean; patch: number | null }
+    | { kind: "split" }
+    | { kind: "corner"; k: number };
+  let drag: Drag | null = null;
+  let panning = $state(false);
+
+  /** Image units per screen pixel. */
+  function unitsPerPx(): number {
+    const ctm = svg?.getScreenCTM();
+    return ctm ? 1 / ctm.a : 1;
   }
+
   function onPointerDown(e: PointerEvent) {
-    if (placing || app.chartView !== "split" || e.button !== 0) return;
+    if (placing || e.button !== 0) return;
     // No native drag of the image (it would land in the window's file drop).
     e.preventDefault();
-    dragging = true;
+    const p = toImage(e);
+    if (!p) return;
+    const el = e.target as Element;
+    const corner = el.closest("[data-corner]")?.getAttribute("data-corner");
+    const patch = el.closest("[data-patch]")?.getAttribute("data-patch");
+    if (corner != null && cornerPts) {
+      drag = { kind: "corner", k: Number(corner) };
+      liveCorners = cornerPts.map((q) => [q[0], q[1]] as [number, number]);
+    } else if (app.chartView === "split" && after && Math.abs(p[0] - split * imgW) < 10 * unitsPerPx()) {
+      drag = { kind: "split" };
+    } else {
+      drag = { kind: "pan", sx: e.clientX, sy: e.clientY, box: custom ?? autoBox, moved: false, patch: patch != null ? Number(patch) : null };
+    }
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    splitAt(e);
   }
+
   function onPointerMove(e: PointerEvent) {
-    if (dragging) splitAt(e);
+    if (!drag) return;
+    if (drag.kind === "split") {
+      const p = toImage(e);
+      if (p) split = Math.min(1, Math.max(0, p[0] / imgW));
+    } else if (drag.kind === "corner") {
+      const p = toImage(e);
+      if (p && liveCorners) liveCorners = liveCorners.map((q, k) => (k === (drag as { k: number }).k ? p : q));
+    } else {
+      const dx = e.clientX - drag.sx;
+      const dy = e.clientY - drag.sy;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      drag.moved = true;
+      panning = true;
+      const u = unitsPerPx();
+      const [x, y, w, h] = drag.box;
+      custom = [x - dx * u, y - dy * u, w, h];
+    }
   }
+
   function onPointerUp() {
-    dragging = false;
+    const d = drag;
+    drag = null;
+    panning = false;
+    if (!d) return;
+    if (d.kind === "corner" && liveCorners) {
+      app.chart.corners = liveCorners.map((q) => [q[0], q[1]]) as typeof app.chart.corners;
+      app.chart.orientation = null;
+    } else if (d.kind === "pan" && !d.moved && d.patch != null && overlay) {
+      togglePatch(d.patch);
+    }
+  }
+
+  /** The projective map taking four points `src` to `dst`, or null. */
+  function homography(src: number[][], dst: number[][]): number[] | null {
+    const A: number[][] = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = src[i];
+      const [u, v] = dst[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y, u]);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y, v]);
+    }
+    for (let c = 0; c < 8; c++) {
+      let piv = c;
+      for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+      if (Math.abs(A[piv][c]) < 1e-12) return null;
+      [A[c], A[piv]] = [A[piv], A[c]];
+      for (let r = 0; r < 8; r++) {
+        if (r === c) continue;
+        const f = A[r][c] / A[c][c];
+        for (let k = c; k < 9; k++) A[r][k] -= f * A[c][k];
+      }
+    }
+    return [...A.map((row, i) => row[8] / row[i]), 1];
+  }
+  function project(h: number[], u: number, v: number): [number, number] {
+    const w = h[6] * u + h[7] * v + h[8];
+    return [(h[0] * u + h[1] * v + h[2]) / w, (h[3] * u + h[4] * v + h[5]) / w];
   }
   async function chooseCompare() {
     const p = await openFile([IMAGE_FILTER], app.lastDir || undefined);
@@ -235,7 +332,7 @@
   async function copyMatrix() {
     try {
       await copyText(await api.chartMatrixText());
-      app.notify("Matrix copied");
+      app.notify(mixer ? "Mixer values copied" : "Matrix copied");
     } catch (e) {
       app.notify(String(e), "error");
     }
@@ -289,6 +386,8 @@
   const unused = $derived(a ? a.patches.filter((p) => !p.used) : []);
   const tps = $derived(app.chart.fit.model === "tps");
   const hasTps = $derived(app.chart.fit.model === "tps" || app.chart.fit.model === "matrix_tps");
+  const mixer = $derived(app.chart.fit.model === "mixer");
+  const keepsExposure = $derived(tps || mixer);
   // Equal R, G, B through the matrix (linear DWG), brightest channel = 1.
   function whiteThrough(m: number[][]): number[] | null {
     const w = m.map((r) => r[0] + r[1] + r[2]);
@@ -301,7 +400,7 @@
     return s === "measured"
       ? "measured in this still"
       : s === "brightest"
-        ? "this still doesn't clip: its brightest value, set it to where the footage clips"
+        ? "the still doesn't clip, so set this"
         : s === "set"
           ? "set by hand"
           : "a typical value";
@@ -331,7 +430,7 @@
             <span class="muted small">
               {#if a}
                 {a.placement_source === "manual" ? "Placed by hand" : `Found ${a.detected_patches} patches`} · {cat?.orientations.find(([k]) => k === a.placement.orientation)?.[1] ?? ""}
-                · click a patch to leave it out · scroll to zoom
+                · drag the blue corners to adjust · click a patch to skip it · drag to pan, scroll to zoom
               {:else if app.chartError}
                 {app.chartError}
               {:else}
@@ -345,7 +444,7 @@
               <button class="btn" onclick={useDetection}>Use detection</button>
             {/if}
             {#if !comparing}<button class="btn" onclick={startPlacing}>Place by hand…</button>{/if}
-            <button class="btn" onclick={chooseCompare} disabled={!f} title="See the correction on another still from this camera (no chart needed)">Other Still…</button>
+            <button class="btn" onclick={chooseCompare} disabled={!f} title="Try the correction on another shot from this camera">Other Still…</button>
           {/if}
         </div>
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -358,8 +457,10 @@
           onpointerdown={onPointerDown}
           onpointermove={onPointerMove}
           onpointerup={onPointerUp}
+          onpointercancel={onPointerUp}
           class:stale={app.chartAnalyzing}
-          class:splitting={app.chartView === "split" && !placing}
+          class:panning
+          class:placing={!!placing}
         >
           {#if pv && !(app.chartView === "after" && after)}
             <image href={pv.data_url} x="0" y="0" width={imgW} height={imgH} />
@@ -372,11 +473,14 @@
             <image href={after.data_url} x="0" y="0" width={imgW} height={imgH} clip-path="url(#after-clip)" />
             <line class="divider" x1={split * imgW} y1="0" x2={split * imgW} y2={imgH} />
           {/if}
-          {#if a && !placing && overlay}
+          {#if a && !placing && overlay && liveBoxes}
+            {#each liveBoxes as b, i (i)}
+              <polygon class="live" points={b.map((q) => q.join(",")).join(" ")} />
+            {/each}
+          {:else if a && !placing && overlay}
             {#each a.patches as p (p.index)}
               {@const st = patchState(p)}
-              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-              <g class="patch {st}" onclick={(e) => { e.stopPropagation(); togglePatch(p.index); }}>
+              <g class="patch {st}" data-patch={p.index}>
                 <title>{p.index + 1} {p.name}{p.reason ? ` — ${p.reason}` : ""} · ΔE {fmt(p.de_before, 1)} → {fmt(p.de_after, 1)}</title>
                 <polygon points={p.sample_box.map((q) => q.join(",")).join(" ")} />
                 <text
@@ -388,6 +492,15 @@
                 {#if st !== "used"}
                   <line x1={p.sample_box[0][0]} y1={p.sample_box[0][1]} x2={p.sample_box[2][0]} y2={p.sample_box[2][1]} />
                 {/if}
+              </g>
+            {/each}
+          {/if}
+          {#if a && !placing && overlay && cornerPts}
+            {#each cornerPts as q, k (k)}
+              <g class="corner" data-corner={k}>
+                <title>Drag to move the chart's corner (patch {CORNER_PATCHES[k] + 1})</title>
+                <circle cx={q[0]} cy={q[1]} r={(custom ?? autoBox)[2] / 70} class="hit" />
+                <circle cx={q[0]} cy={q[1]} r={(custom ?? autoBox)[2] / 150} class="dot" />
               </g>
             {/each}
           {/if}
@@ -423,7 +536,7 @@
             disabled={!f}
             options={[
               { value: "before", label: "Before" },
-              { value: "after", label: "After", title: "With the correction, as the exported DCTL applies it" },
+              { value: "after", label: "After", title: "As the exported DCTL will look" },
               { value: "split", label: "Split" },
             ]}
           />
@@ -501,7 +614,7 @@
             </div>
           </div>
           <div class="row">
-            <div class="label">Curve<div class="sub">How the still's values relate to light</div></div>
+            <div class="label">Curve<div class="sub">The still's transfer curve</div></div>
             <div class="value">
               {#if a && !app.chart.space}<span class={confClass(a.guess.curve_confidence)}>{a.guess.curve_confidence}</span>{/if}
               <select value={curveSel} onchange={(e) => setCurve(e.currentTarget.value)} aria-label="Curve">
@@ -511,7 +624,7 @@
             </div>
           </div>
           <div class="row">
-            <div class="label">Gamut<div class="sub">What the still was exported in</div></div>
+            <div class="label">Gamut<div class="sub">The still's colour space</div></div>
             <div class="value">
               {#if a && !app.chart.space}<span class={confClass(a.guess.gamut_confidence)}>{a.guess.gamut_confidence}</span>{/if}
               <select value={gamutSel} onchange={(e) => setGamut(e.currentTarget.value)} aria-label="Gamut">
@@ -539,7 +652,7 @@
                 label="Target"
                 options={[
                   { value: "reference", label: "Published chart" },
-                  { value: "chart", label: "Another camera", title: "The chart in another still, as that camera shows it" },
+                  { value: "chart", label: "Another camera", title: "Match this camera to another camera's chart" },
                 ]}
               />
             </div>
@@ -555,7 +668,7 @@
             </div>
           {:else}
             <div class="row">
-              <div class="label">Hero still<div class="sub">Its chart and exposure become the target</div></div>
+              <div class="label">Hero still<div class="sub">The camera to match</div></div>
               <div class="value">
                 <span class="name" title={app.chartTarget?.path}>{app.chartTarget?.file_name ?? "—"}</span>
                 <button class="btn plain" onclick={chooseTarget}>Choose…</button>
@@ -575,43 +688,65 @@
                 bind:value={app.chart.fit.model}
                 label="Model"
                 options={[
-                  { value: "matrix", label: "Matrix", title: "One 3×3 matrix in linear XYZ" },
-                  { value: "matrix_tone", label: "Matrix + tone", title: "A per-channel curve in linear DWG first: for footage whose grays don't follow the light" },
-                  { value: "tps", label: "TPS3D", title: "Colour only: a gray balance curve and a thin-plate spline through the patches, no matrix (as TPS3D Fast)" },
-                  { value: "matrix_tps", label: "Matrix + TPS3D", title: "The 3×3 matrix, then TPS3D (colour only) on what it leaves" },
+                  { value: "matrix", label: "Matrix", title: "A 3×3 matrix" },
+                  { value: "matrix_tone", label: "Matrix + tone", title: "A tone curve per channel, then the matrix" },
+                  { value: "tps", label: "TPS3D", title: "A thin-plate spline through the patches; colour only, no matrix" },
+                  { value: "matrix_tps", label: "Matrix + TPS3D", title: "The matrix, then TPS3D on what's left" },
+                  { value: "mixer", label: "RGB Mixer", title: "Values for Resolve's RGB Mixer" },
                 ]}
               />
             </div>
           </div>
-          <div class="row" class:off={tps}>
-            <div class="label">Exposure{#if tps}<div class="sub">TPS3D changes colour only: exposure and contrast stay as shot</div>{/if}</div>
+          <div class="row" class:off={keepsExposure}>
+            <div class="label">Exposure{#if keepsExposure}<div class="sub">{tps ? "TPS3D" : "The RGB Mixer"} leaves exposure as shot</div>{/if}</div>
             <div class="value">
               <Segmented
-                disabled={tps}
-                bind:value={app.chart.fit.exposure}
+                disabled={keepsExposure}
+                bind:value={() => (keepsExposure ? "keep" : app.chart.fit.exposure), (v) => (app.chart.fit.exposure = v)}
                 label="Exposure"
                 options={[
-                  { value: "match", label: "Match target", title: "The correction also sets the chart's exposure to the target's" },
-                  { value: "keep", label: "Keep", title: "Unity gain on the grays: colour only" },
+                  { value: "match", label: "Match target", title: "Also correct the exposure" },
+                  { value: "keep", label: "Keep", title: "Colour only" },
                 ]}
               />
             </div>
           </div>
-          {#if !tps}
+          {#if mixer}
+          <div class="row">
+            <div class="label">Preserve Luminance<div class="sub">As in Resolve: each output's sliders add up to 1</div></div>
+            <div class="value"><Toggle bind:checked={app.chart.fit.mixer_preserve} label="Preserve Luminance" /></div>
+          </div>
+          <div class="row">
+            <div class="label">Node works on<div class="sub">DI log is a normal node in a DWG/DI timeline</div></div>
+            <div class="value">
+              <Segmented
+                bind:value={app.chart.fit.mixer_space}
+                label="Node works on"
+                options={[
+                  { value: "di", label: "DI log" },
+                  { value: "linear", label: "Linear", title: "The node's colour space set to linear" },
+                ]}
+              />
+            </div>
+          </div>
+          {/if}
+          {#if !tps && !mixer}
           <div class="row">
             <div class="label">
-              Preserve neutrals<div class="sub">The matrix after the white balance keeps equal R, G, B equal: with the white balance off (footage balanced in the raw decode) clipped white stays white</div>
+              Preserve neutrals<div class="sub">Keeps white white when the white balance is done in raw</div>
             </div>
             <div class="value"><Toggle bind:checked={app.chart.fit.preserve_neutrals} label="Preserve neutrals" /></div>
           </div>
           <div class="row" class:off={app.chart.fit.preserve_neutrals}>
             <div class="label">
-              Lock neutral<div class="sub">{app.chart.fit.preserve_neutrals ? "Not needed: the white balance makes the grays neutral" : "Grays land exactly on the target's gray"}</div>
+              Lock neutral<div class="sub">{app.chart.fit.preserve_neutrals ? "Not needed with Preserve neutrals" : "Grays match the target exactly"}</div>
             </div>
             <div class="value"><Toggle bind:checked={app.chart.fit.lock_neutral} label="Lock neutral" disabled={app.chart.fit.preserve_neutrals} /></div>
           </div>
+          {/if}
+          {#if !tps}
           <div class="row">
-            <div class="label">Restraint<div class="sub">Closer to a plain white balance: less noise where a channel was barely recorded</div></div>
+            <div class="label">Restraint<div class="sub">{mixer ? "Smaller mixer values" : "A gentler matrix: less noise in weak channels"}</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.restraint}
@@ -627,20 +762,20 @@
           {/if}
           {#if hasTps}
           <div class="row">
-            <div class="label">TPS3D patches<div class="sub">Which colour patches the spline goes through (the grays always). Colour only: brightness and contrast are kept</div></div>
+            <div class="label">TPS3D patches<div class="sub">Colours the spline goes through (grays always)</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.tps_patches}
                 label="Patches"
                 options={[
                   { value: "all", label: "All colours" },
-                  { value: "primaries", label: "6 primaries", title: "Red, yellow, green, cyan, blue, magenta: fewer points, a smoother spline" },
+                  { value: "primaries", label: "6 primaries", title: "Red, yellow, green, cyan, blue, magenta: smoother" },
                 ]}
               />
             </div>
           </div>
           <div class="row">
-            <div class="label">TPS3D smoothing<div class="sub">Exact goes through every patch, noise included (as TPS3D Fast)</div></div>
+            <div class="label">TPS3D smoothing<div class="sub">Exact hits every patch, noise included</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.tps_smoothing}
@@ -656,7 +791,7 @@
           {#if f?.tps_check != null}
             <div class="row">
               <div class="label">
-                Cross-check<div class="sub">Each patch as predicted by a fit that never saw it, mean ΔE2000: how well colours between the patches are likely to come out</div>
+                Cross-check<div class="sub">Error on colours the fit didn't see (lower is better)</div>
               </div>
               <div class="value num small nowrap">
                 {tps ? "TPS3D" : "Matrix + TPS3D"} <b class:warnc={f.matrix_check != null && f.tps_check >= f.matrix_check}>{fmt(f.tps_check, 1)}</b> · 3×3 matrix {fmt(f.matrix_check ?? NaN, 1)}
@@ -664,7 +799,20 @@
             </div>
           {/if}
           {/if}
-          {#if f && !tps}
+          {#if f?.mixer}
+            <div class="row mat">
+              <div class="label">RGB Mixer<div class="sub">Type these into Resolve's RGB Mixer (Preserve Luminance {f.mixer.preserve_luminance ? "on" : "off"})</div></div>
+              <div class="value num">
+                <table class="mixer">
+                  <thead><tr><th></th><th>R</th><th>G</th><th>B</th></tr></thead>
+                  <tbody>
+                    {#each f.mixer.rows as r, k}<tr><th>{["Red", "Green", "Blue"][k]} Output</th>{#each r as v}<td>{fmt(v, 2)}</td>{/each}</tr>{/each}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {/if}
+          {#if f && !tps && !mixer}
             <div class="row mat">
               <div class="label">Matrix<div class="sub">In linear DWG, after the {f.tone ? "tone curve and " : ""}white balance</div></div>
               <div class="value num">
@@ -683,9 +831,7 @@
             {/if}
             <div class="row">
               <div class="label">
-                White balance<div class="sub">
-                  Gains in linear DWG before the matrix, for a camera gray of {fmt(f.gray_dwg[0], 2)} : 1 : {fmt(f.gray_dwg[2], 2)}. In the DCTL, tick “WB Done In Raw” for footage white-balanced in the raw decode; off here starts it ticked
-                </div>
+                White balance<div class="sub">Off: the DCTL starts with “WB Done In Raw” ticked</div>
               </div>
               <div class="value">
                 <span class="num small">R ×{fmt(f.wb_gains[0], 3)} · B ×{fmt(f.wb_gains[2], 3)}</span>
@@ -693,7 +839,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="label">Clipped white becomes<div class="sub">Equal R, G, B through the correction, R : G : B</div></div>
+              <div class="label">Clipped white becomes<div class="sub">R : G : B, with the white balance on / off</div></div>
               <div class="value num small nowrap">
                 WB on <span class:warnc={whiteOn && Math.min(...whiteOn) < 0.8}>{whiteOn ? whiteOn.map((v) => fmt(v, 2)).join(" : ") : "—"}</span>
                 · off <span class:warnc={whiteOff && Math.min(...whiteOff) < 0.8}>{whiteOff ? whiteOff.map((v) => fmt(v, 2)).join(" : ") : "—"}</span>
@@ -701,14 +847,14 @@
             </div>
           {/if}
           <div class="row">
-            <div class="label">Highlight protection<div class="sub">In the DCTL: near the clip, clipped areas go to white instead of the colour the correction gives them</div></div>
+            <div class="label">Highlight protection<div class="sub">Keeps clipped highlights white</div></div>
             <div class="value"><Toggle bind:checked={app.chart.highlights.enabled} label="Highlight protection" /></div>
           </div>
           {#if app.chart.highlights.enabled}
             <div class="row">
               <div class="label">
                 Clip level<div class="sub">
-                  DaVinci Intermediate code where the footage clips{#if a}
+                  Where the footage clips (DI){#if a}
                     {" · "}{clipSourceText(app.chart.highlights.clip_di === null ? a.highlights.source : a.highlights.measured_source)}
                     {#if app.chart.highlights.clip_di !== null}{" "}{fmt(a.highlights.measured_di, 3)}{/if}
                   {/if}
@@ -734,7 +880,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="label">Softness<div class="sub">How far below the clip the protection starts</div></div>
+              <div class="label">Softness<div class="sub">How far below the clip it fades in</div></div>
               <div class="value">
                 <Segmented
                   bind:value={app.chart.highlights.softness}
@@ -747,15 +893,15 @@
                 />
               </div>
             </div>
-            <div class="row"><div class="faint small">Clipped channels are rebuilt towards the camera's white. Strength, clip level and softness are sliders in the DCTL too.</div></div>
+            <div class="row"><div class="faint small">Also adjustable in the DCTL.</div></div>
           {/if}
           <div class="row go">
             <span class="grow"></span>
-            <button class="btn" onclick={copyMatrix} disabled={!f}><Icon name="copy" size={14} /> Copy Matrix</button>
+            <button class="btn" onclick={copyMatrix} disabled={!f || tps}><Icon name="copy" size={14} /> {mixer ? "Copy Values" : "Copy Matrix"}</button>
             <button class="btn primary" onclick={exportDctl} disabled={!f}><Icon name="export" size={14} /> Export DCTL…</button>
           </div>
         </div>
-        <p class="faint small">The DCTL works in DaVinci Wide Gamut / Intermediate: use it on this camera's footage, decoded like the still, before the output transform.</p>
+        <p class="faint small">For a DaVinci Wide Gamut / Intermediate timeline: put it before the output transform, on footage decoded like the still.</p>
 
         <div class="group-title">OpenDRT preset</div>
         <div class="group">
@@ -779,15 +925,15 @@
             </div>
           </div>
           <div class="row">
-            <div class="label">After the matrix<div class="sub">Fit for “chart DCTL → OpenDRT”; off fits OpenDRT alone</div></div>
+            <div class="label">After the correction<div class="sub">For “chart DCTL → OpenDRT”; off fits OpenDRT alone</div></div>
             <div class="value"><Toggle bind:checked={app.odrtChart.after_matrix} label="After the matrix" /></div>
           </div>
           <div class="row">
-            <div class="label">Fit tone<div class="sub">Contrast and black offset too, not only colour</div></div>
+            <div class="label">Fit tone<div class="sub">Contrast and black level too</div></div>
             <div class="value"><Toggle bind:checked={app.odrtChart.fit_tone} label="Fit tone" /></div>
           </div>
           <div class="row">
-            <div class="label">Smoothing<div class="sub">Pull towards the look: 24 patches can't pin down every parameter</div></div>
+            <div class="label">Smoothing<div class="sub">Stays closer to the chosen look</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.odrtChart.regularization}
@@ -911,10 +1057,6 @@
     aspect-ratio: 3 / 2;
     background: #111;
     display: block;
-    cursor: default;
-  }
-  .placing svg {
-    cursor: crosshair;
   }
   svg.stale {
     opacity: 0.75;
@@ -993,10 +1135,40 @@
   .tag.right {
     right: 8px;
   }
-  svg.splitting {
-    cursor: ew-resize;
+  svg {
+    cursor: grab;
     user-select: none;
     touch-action: none;
+  }
+  svg.panning {
+    cursor: grabbing;
+  }
+  svg.placing {
+    cursor: crosshair;
+  }
+  .corner {
+    cursor: move;
+  }
+  .corner .hit {
+    fill: transparent;
+  }
+  .corner .dot {
+    fill: var(--accent);
+    stroke: #fff;
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+  }
+  .corner:hover .dot {
+    fill: #fff;
+    stroke: var(--accent);
+  }
+  polygon.live {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 1.5px;
+    stroke-dasharray: 4 3;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
   }
   svg image {
     -webkit-user-drag: none;
@@ -1146,6 +1318,12 @@
   input.clip {
     width: 84px;
     text-align: right;
+  }
+  table.mixer th {
+    font-weight: 500;
+    color: var(--label-2);
+    text-align: right;
+    padding-right: 8px;
   }
   .nowrap {
     white-space: nowrap;
