@@ -25,6 +25,9 @@
 <style>
   .seg {
     display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 100%;
     padding: 2px;
     gap: 2px;
     background: color-mix(in srgb, var(--label) 7%, transparent);

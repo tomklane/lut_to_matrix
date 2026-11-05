@@ -65,7 +65,8 @@ for footage white-balanced in the raw decode; *Preserve neutrals* keeps the rest
 correction from tinting white. *TPS3D* replaces the matrix with a colour-only gray
 balance and thin-plate spline (exposure and contrast stay as shot); *Matrix + TPS3D* runs
 it after the matrix. Compare the cross-check with the matrix's before trusting either.
-*RGB Mixer* gives values to type into Resolve's RGB Mixer. Drag the blue corner handles
+*RGB Mixer* gives values to type into Resolve's RGB Mixer; *Gain + Mixer* gives Gain
+and Saturation for a linear node and the RGB Mixer for the next one. Drag the blue corner handles
 to fine-tune where the patches are sampled. Under the
 image, *Before / After / Split* shows the
 correction as the DCTL applies it (plain or through OpenDRT), and *Other Still…* shows
@@ -201,6 +202,7 @@ lutmatrix chart still.tif --preserve-neutrals --dctl c.dctl  # matrix after the 
 lutmatrix chart still.tif --model tps --dctl c.dctl          # TPS3D: colour-only gray balance + thin-plate spline, no matrix
 lutmatrix chart still.tif --model matrix-tps --dctl c.dctl   # the matrix, then TPS3D (colour only)
 lutmatrix chart still.tif --model mixer                      # values for Resolve's RGB Mixer (Preserve Luminance)
+lutmatrix chart still.tif --model nodes                      # linear node Gain + Saturation, then the RGB Mixer on DI
 ```
 
 ### Batch: every negative × every print, plus full LUTs

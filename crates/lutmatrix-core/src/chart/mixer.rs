@@ -98,6 +98,59 @@ impl Mixer {
     }
 }
 
+/// Rec. 709 luma weights (ITU-R BT.709-6, item 3.2), what Saturation keeps fixed here.
+pub const REC709_LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
+
+/// The user's two-node chain in Resolve (DECISIONS.md D47):
+/// 1. a node with its colour space gamma set to linear: Gain R, G, B (a multiply per
+///    channel), then Saturation `s` around the luma `Y` (out = Y + s·(in − Y)); Resolve's
+///    slider is 50·s (0 … 100, 50 = unity, 100 = double);
+/// 2. a node in DWG/DI with the RGB Mixer ([`Mixer`], normally on DI values).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NodeChain {
+    pub gains: [f64; 3],
+    pub saturation: f64,
+    /// The weights Saturation keeps fixed (assumed Rec. 709).
+    pub luma: [f64; 3],
+    pub mixer: Mixer,
+}
+
+impl NodeChain {
+    /// Node 1 on linear DWG.
+    pub fn node1(&self, d: &Vec3) -> Vec3 {
+        let g = Vec3::new(d.x * self.gains[0], d.y * self.gains[1], d.z * self.gains[2]);
+        let y = self.luma[0] * g.x + self.luma[1] * g.y + self.luma[2] * g.z;
+        Vec3::repeat(y) + (g - Vec3::repeat(y)) * self.saturation
+    }
+
+    /// Both nodes, CIE XYZ (D65) in and out.
+    pub fn apply_xyz(&self, xyz: &Vec3) -> Vec3 {
+        self.mixer.apply_xyz(&(davinci::dwg_to_xyz() * self.node1(&(davinci::xyz_to_dwg() * xyz))))
+    }
+
+    /// Resolve's Saturation slider for this chain.
+    pub fn saturation_slider(&self) -> f64 {
+        50.0 * self.saturation
+    }
+
+    /// The values to type into Resolve, as text.
+    pub fn text(&self) -> String {
+        format!(
+            "Node 1 (gamma linear): Gain R {:.3}  G {:.3}  B {:.3}, Saturation {:.1}\nNode 2 (RGB Mixer, {}{}):\n{}",
+            self.gains[0],
+            self.gains[1],
+            self.gains[2],
+            self.saturation_slider(),
+            match self.mixer.space {
+                MixerSpace::Di => "DI",
+                MixerSpace::Linear => "linear",
+            },
+            if self.mixer.preserve_luminance { ", Preserve Luminance" } else { "" },
+            self.mixer.text()
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +171,18 @@ mod tests {
         let free = Mixer::from_params(&[1.0, 0.2, 0.0, 0.0, 0.9, 0.1, 0.0, 0.0, 1.1], MixerSpace::Linear, false);
         assert_eq!(free.params().len(), 9);
         assert!(free.text().starts_with("Red Output: R 1.00  G 0.20  B 0.00"));
+    }
+
+    #[test]
+    fn node_chain_saturation_keeps_luma_and_grays() {
+        let id = Mixer::from_params(&[0.0; 6], MixerSpace::Di, true);
+        let c = NodeChain { gains: [1.0; 3], saturation: 1.6, luma: REC709_LUMA, mixer: id };
+        let d = Vec3::new(0.3, 0.12, 0.05);
+        let o = c.node1(&d);
+        let y = |v: &Vec3| REC709_LUMA[0] * v.x + REC709_LUMA[1] * v.y + REC709_LUMA[2] * v.z;
+        assert!((y(&o) - y(&d)).abs() < 1e-12);
+        let g = Vec3::repeat(0.4);
+        assert!((c.node1(&g) - g).norm() < 1e-12);
+        assert_eq!(c.saturation_slider(), 80.0);
     }
 }

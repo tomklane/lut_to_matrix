@@ -715,3 +715,21 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   manual placement; *Use detection* goes back). In Split view, dragging near the line
   moves it.
 
+## D47 — Node chain model: linear Gain + Saturation, then RGB Mixer on DI (user request 2026-11-05)
+- Mirrors the user's Resolve workflow: node 1 with its colour space gamma set to linear,
+  Gain R/G/B (multiply per channel) and Saturation; node 2 the RGB Mixer on DWG/DI
+  values. Fitted together (LM on ΔLab, neutrals weighted): ln gains (1/64 … 64), the
+  saturation within Resolve's slider (0 … 100 = ×0 … ×2, 50 = unity; Resolve 18.6
+  Reference Manual, Primaries), and the mixer (Preserve Luminance option, DI or linear
+  node as for the RGB Mixer model). Starts: gains at the gray balance, saturation 1 and
+  1.4, mixer identity; free rows also start from the Preserve Luminance fit. Restraint
+  pulls the mixer to identity and saturation to 1. Exposure: the gains can carry it, so
+  Match / Keep both apply.
+- Saturation is modelled as `Y + s·(in − Y)` with Rec. 709 luma weights on the node's
+  linear DWG values. Resolve's manual doesn't give its formula; to be verified against a
+  Resolve still (node 1 with only Saturation changed).
+- Order inside node 1 assumed Gain, then Saturation.
+- Why this order is quieter than a matrix: the white balance is a plain multiply in
+  linear, and the DI mixer needs smaller values than a linear one (measured on the
+  underwater chart: about half the red noise).
+

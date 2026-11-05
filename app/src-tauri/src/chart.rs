@@ -227,6 +227,9 @@ pub fn chart_export_dctl(dctl_path: String, state: State<ChartState>) -> CmdResu
 pub fn chart_matrix_text(state: State<ChartState>) -> CmdResult<String> {
     let guard = state.0.analysis.lock().unwrap();
     let f = guard.as_ref().and_then(|a| a.fit.as_ref()).ok_or("no correction yet")?;
+    if let Some(c) = &f.chain {
+        return Ok(c.text());
+    }
     if let Some(m) = &f.mixer {
         return Ok(m.text());
     }
