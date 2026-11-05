@@ -725,9 +725,17 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   1.4, mixer identity; free rows also start from the Preserve Luminance fit. Restraint
   pulls the mixer to identity and saturation to 1. Exposure: the gains can carry it, so
   Match / Keep both apply.
-- Saturation is modelled as `Y + s·(in − Y)` with Rec. 709 luma weights on the node's
-  linear DWG values. Resolve's manual doesn't give its formula; to be verified against a
-  Resolve still (node 1 with only Saturation changed).
+- Saturation (revised in 0.10.1, measured): Resolve's manual doesn't give its formula,
+  so it was measured from two Resolve stills by the user (node 1 gamma linear, same Gain,
+  Saturation 50 and 100). Plain `Y + s·(in − Y)` on the linear values with Rec. 709
+  weights misses by 4.6 / 1023 DI codes on average (and about 7 % of pixels would go
+  below 0, which Resolve doesn't do). What fits: the same formula on the square roots of
+  the linear values, `t = √g`, `Y = w · t`, `out = max(Y + s·(t − Y), 0)²`, with
+  w = [0.235, 0.573, 0.192] (fitted; sum 1) and s = slider / 50: 2.8 / 1023 on average,
+  and only 0.4 % of pixels reach 0, where the clamp matches the stills. Searched: powers
+  0.40 … 0.66 (0.5 best, 0.45 … 0.55 within 0.1 codes), DI log values (6.9), Rec. 709
+  weights in each (6.6 … 10.8), s free (2.05 gains 0.3 codes; kept at slider / 50). The
+  stills themselves are not committed (user data).
 - Order inside node 1 assumed Gain, then Saturation.
 - Why this order is quieter than a matrix: the white balance is a plain multiply in
   linear, and the DI mixer needs smaller values than a linear one (measured on the

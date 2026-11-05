@@ -350,6 +350,9 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
         let _ = writeln!(w);
         rebuild_fn(w);
     }
+    let _ = writeln!(w, "__DEVICE__ float sat_enc(float v) {{ return v < 0.0f ? -_sqrtf(-v) : _sqrtf(v); }}");
+    let _ = writeln!(w, "__DEVICE__ float sat_dec(float t) {{ t = _fmaxf(t, 0.0f); return t * t; }}");
+    let _ = writeln!(w);
     for (k, ch_) in ["R", "G", "B"].iter().enumerate() {
         let _ = writeln!(w, "#define GAIN_{ch_}      {}", lit(ch.gains[k]));
         let _ = writeln!(w, "#define LUMA_{ch_}      {}", lit(ch.luma[k]));
@@ -371,10 +374,11 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
         let _ = writeln!(w, "                      rebuild(dwg.y, sc, p_HlProtect, p_HlClip, p_HlSoft),");
         let _ = writeln!(w, "                      rebuild(dwg.z, sc * CAM_WHITE_B, p_HlProtect, p_HlClip, p_HlSoft));");
     }
-    let _ = writeln!(w, "    // Node 1 (linear): Gain, then Saturation around the luma");
-    let _ = writeln!(w, "    float3 g = make_float3(dwg.x * GAIN_R, dwg.y * GAIN_G, dwg.z * GAIN_B);");
+    let _ = writeln!(w, "    // Node 1 (linear): Gain, then Saturation (as Resolve does it: on the square roots");
+    let _ = writeln!(w, "    // of the linear values, around their weighted level, kept at or above 0)");
+    let _ = writeln!(w, "    float3 g = make_float3(sat_enc(dwg.x * GAIN_R), sat_enc(dwg.y * GAIN_G), sat_enc(dwg.z * GAIN_B));");
     let _ = writeln!(w, "    float y = LUMA_R * g.x + LUMA_G * g.y + LUMA_B * g.z;");
-    let _ = writeln!(w, "    g = make_float3(y + (g.x - y) * SAT, y + (g.y - y) * SAT, y + (g.z - y) * SAT);");
+    let _ = writeln!(w, "    g = make_float3(sat_dec(y + (g.x - y) * SAT), sat_dec(y + (g.y - y) * SAT), sat_dec(y + (g.z - y) * SAT));");
     match ch.mixer.space {
         MixerSpace::Di => {
             let _ = writeln!(w, "    // Node 2: RGB Mixer on DaVinci Intermediate values");

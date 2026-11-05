@@ -6,6 +6,14 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-05
+
+### Fixed
+- **Gain + Mixer**: Saturation now works as Resolve's does in a linear node (measured
+  from Resolve stills, DECISIONS D47): on the square roots of the linear values, so the
+  fitted Saturation value carries over to Resolve. Before, it was modelled directly on
+  the linear values, and a fitted Saturation could look different in Resolve.
+
 ## [0.10.0] - 2026-11-05
 
 ### Added
