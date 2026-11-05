@@ -36,7 +36,7 @@ pub struct ChartArgs {
     /// after2014 or before2014.
     #[arg(long, default_value = "after2014")]
     edition: String,
-    /// matrix, tone (matrix + per-channel tone curve) tps (TPS3D, colour only, no matrix) or matrix-tps (matrix, then TPS3D).
+    /// matrix, tone (matrix + per-channel tone curve) tps (TPS3D, colour only, no matrix), matrix-tps (matrix, then TPS3D) or mixer (Resolve's RGB Mixer).
     #[arg(long, default_value = "matrix")]
     model: String,
     /// match (correct the exposure too) or keep.
@@ -52,6 +52,12 @@ pub struct ChartArgs {
     /// so the grays keep what is left of the camera's cast.
     #[arg(long)]
     preserve_neutrals: bool,
+    /// RGB Mixer only: rows free (Resolve's Preserve Luminance off).
+    #[arg(long)]
+    mixer_free: bool,
+    /// RGB Mixer only: the node works on linear values (default: DaVinci Intermediate).
+    #[arg(long)]
+    mixer_linear: bool,
     /// TPS3D only: fit the six primaries (and the grays) instead of all colour patches.
     #[arg(long)]
     tps_primaries: bool,
@@ -180,6 +186,7 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
         "tone" => Model::MatrixTone,
         "tps" | "tps3d" => Model::Tps,
         "matrix-tps" => Model::MatrixTps,
+        "mixer" => Model::Mixer,
         m => return Err(format!("unknown model '{m}'")),
     };
     s.fit.exposure = match args.exposure.as_str() {
@@ -190,6 +197,10 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     s.fit.lock_neutral = !args.no_lock_neutral;
     s.fit.restraint = args.restraint;
     s.fit.preserve_neutrals = args.preserve_neutrals;
+    s.fit.mixer_preserve = !args.mixer_free;
+    if args.mixer_linear {
+        s.fit.mixer_space = lutmatrix_core::chart::mixer::MixerSpace::Linear;
+    }
     if args.tps_primaries {
         s.fit.tps_patches = lutmatrix_core::chart::fit::TpsPatches::Primaries;
     }
@@ -316,7 +327,13 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
                 ratio(&f.m_dwg),
                 ratio(&f.m_dwg_after_wb)
             );
-            println!("  White bal.  R ×{:.4}, G ×1, B ×{:.4} (linear DWG)", f.wb_gains[0], f.wb_gains[2]);
+            if let Some(m) = &f.mixer {
+                for line in m.text().lines() {
+                    println!("  RGB Mixer   {line}");
+                }
+            } else {
+                println!("  White bal.  R ×{:.4}, G ×1, B ×{:.4} (linear DWG)", f.wb_gains[0], f.wb_gains[2]);
+            }
             if let (Some(t), Some(c)) = (&f.tps, f.tps_check) {
                 println!(
                     "  TPS3D       smoothing {:.4}: chart mean {:.2}, cross-check {:.2}; the matrix model: {:.2}, cross-check {:.2}",

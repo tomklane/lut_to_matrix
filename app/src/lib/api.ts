@@ -435,7 +435,7 @@ export interface LoadedStill {
   found: number;
 }
 export interface ChartFitSettings {
-  model: "matrix" | "matrix_tone" | "tps" | "matrix_tps";
+  model: "matrix" | "matrix_tone" | "tps" | "matrix_tps" | "mixer";
   exposure: "match" | "keep";
   lock_neutral: boolean;
   neutral_weight: number;
@@ -445,6 +445,9 @@ export interface ChartFitSettings {
   /** TPS3D: the colour patches the spline goes through. */
   tps_patches: "all" | "primaries";
   tps_smoothing: number;
+  /** RGB Mixer: Resolve's Preserve Luminance; what the node works on. */
+  mixer_preserve: boolean;
+  mixer_space: "di" | "linear";
 }
 export interface HighlightSettings {
   enabled: boolean;
@@ -487,6 +490,8 @@ export const defaultChartFit: ChartFitSettings = {
   preserve_neutrals: false,
   tps_patches: "all",
   tps_smoothing: 0,
+  mixer_preserve: true,
+  mixer_space: "di",
 };
 export interface PatchSample {
   mean: [number, number, number];
@@ -548,6 +553,7 @@ export interface ChartFit {
   /** TPS3D: each patch predicted by a spline fitted without it; the same for the matrix. */
   tps_check: number | null;
   matrix_check: number | null;
+  mixer: { rows: [number, number, number][]; space: "di" | "linear"; preserve_luminance: boolean } | null;
   notes: string[];
 }
 export interface ChartAnalysis {

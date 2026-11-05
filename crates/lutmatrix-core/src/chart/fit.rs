@@ -32,6 +32,7 @@ use crate::math::{whites, Mat3, Vec3};
 use crate::spaces::curves::di_encode;
 use crate::spaces::davinci;
 
+use super::mixer::{Mixer, MixerSpace};
 use super::tps::{dedupe, fit_tps, identity_anchors, GrayCurve, Tps, TpsPoint};
 
 /// What happens to the chart's exposure.
@@ -57,9 +58,16 @@ pub enum Model {
     Tps,
     /// The 3×3 matrix, then TPS3D (colour only) on what it leaves (D45).
     MatrixTps,
+    /// Resolve's RGB Mixer: a 3×3 on the node's values (DI log by default) (D46).
+    Mixer,
 }
 
 impl Model {
+    /// Has the 3×3 matrix (and its white balance, neutral lock and preserve neutrals).
+    pub fn has_matrix(self) -> bool {
+        matches!(self, Model::Matrix | Model::MatrixTone | Model::MatrixTps)
+    }
+
     /// Ends in a TPS3D stage.
     pub fn has_tps(self) -> bool {
         matches!(self, Model::Tps | Model::MatrixTps)
@@ -105,6 +113,10 @@ pub struct FitSettings {
     pub tps_patches: TpsPatches,
     /// TPS3D: the spline's smoothing λ: 0 = through every patch exactly (as TPS3D Fast).
     pub tps_smoothing: f64,
+    /// RGB Mixer: Resolve's *Preserve Luminance* (each output's sliders sum to 1).
+    pub mixer_preserve: bool,
+    /// RGB Mixer: what the node works on.
+    pub mixer_space: MixerSpace,
 }
 
 /// Default for [`FitSettings::tps_smoothing`].
@@ -121,6 +133,8 @@ impl Default for FitSettings {
             preserve_neutrals: false,
             tps_patches: TpsPatches::All,
             tps_smoothing: DEFAULT_TPS_SMOOTHING,
+            mixer_preserve: true,
+            mixer_space: MixerSpace::Di,
         }
     }
 }
@@ -208,6 +222,8 @@ pub struct ChartFit {
     pub m_dwg_after_wb: Mat3,
     /// The TPS3D spline (model `Tps`; the matrix is then the identity).
     pub tps: Option<Tps>,
+    /// The RGB Mixer (model `Mixer`; the matrix is then the identity).
+    pub mixer: Option<Mixer>,
     /// Mean ΔE2000 of the 3×3 matrix model on the same chart (for comparison).
     pub mean_matrix: f64,
     /// TPS3D: mean ΔE2000 when each patch is predicted by a spline fitted without it
@@ -229,6 +245,10 @@ impl ChartFit {
     }
 
     fn spline(&self, xyz: Vec3) -> Vec3 {
+        let xyz = match &self.mixer {
+            Some(m) => m.apply_xyz(&xyz),
+            None => xyz,
+        };
         match &self.tps {
             Some(t) => t.apply_xyz(&xyz),
             None => xyz,
@@ -261,7 +281,8 @@ fn mid_neutrals(p: &[FitPatch]) -> Vec<usize> {
 /// Fit `patches` (24, chart order). Needs at least 6 used patches with 2 neutrals.
 pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, String> {
     // TPS3D alone changes colour only: the still's exposure is kept.
-    let s = &FitSettings { exposure: if s.model == Model::Tps { Exposure::Keep } else { s.exposure }, ..*s };
+    // So does the RGB Mixer (it has no exposure control; use Offset for that in Resolve).
+    let s = &FitSettings { exposure: if matches!(s.model, Model::Tps | Model::Mixer) { Exposure::Keep } else { s.exposure }, ..*s };
     let used: Vec<usize> = (0..patches.len()).filter(|&i| patches[i].used).collect();
     let mids = mid_neutrals(patches);
     if used.len() < 6 {
@@ -365,7 +386,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     // Preserve neutrals: after the white balance, the matrix in DWG with every row summing
     // to g, q = [g, a01, a02, a10, a12, a20, a21]; the tone model adds one power and one
     // black for all channels in front.
-    let preserved = (s.preserve_neutrals && s.model != Model::Tps).then(|| {
+    let preserved = (s.preserve_neutrals && s.model.has_matrix()).then(|| {
         let to_xyz = |q: &[f64]| -> Mat3 {
             let g = q[0];
             let d = Mat3::new(g - q[1] - q[2], q[1], q[2], q[3], g - q[3] - q[4], q[4], q[5], q[6], g - q[5] - q[6]);
@@ -427,14 +448,14 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     });
     if let Some((_, Some(t))) = &preserved {
         if t.power[0] <= 0.501 || t.power[0] >= 1.999 {
-            notes.push("the tone curve reached its power limit (0.5 or 2): the neutral row is far from linear".into());
+            notes.push("the tone curve hit its limit (power 0.5 or 2): the grays are far from following the light".into());
         }
     }
 
     let (m, tone) = match (preserved, s.model) {
         (Some(r), _) => r,
         // TPS3D: no matrix, no white balance; the spline comes below.
-        (None, Model::Tps) => (Mat3::identity(), None),
+        (None, Model::Tps | Model::Mixer) => (Mat3::identity(), None),
         (None, Model::Matrix | Model::MatrixTps) => {
             let m0 = ls(None).ok_or("the measured patches don't span three colour dimensions")?;
             let m_wb = wb(None);
@@ -497,13 +518,13 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                 None => m,
             };
             if t.power.iter().any(|p| *p <= 0.501 || *p >= 1.999) {
-                notes.push("the tone curve reached its power limit (0.5 or 2): the neutral row is far from linear".into());
+                notes.push("the tone curve hit its limit (power 0.5 or 2): the grays are far from following the light".into());
             }
             (m, Some(t))
         }
     };
 
-    let wb_gains = if s.model == Model::Tps { [1.0; 3] } else { balance(tone.as_ref()) };
+    let wb_gains = if matches!(s.model, Model::Tps | Model::Mixer) { [1.0; 3] } else { balance(tone.as_ref()) };
     let m_after = m * gains_xyz(wb_gains).try_inverse().unwrap_or_else(Mat3::identity);
     let fit = ChartFit {
         settings: *s,
@@ -513,6 +534,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         m_xyz_after_wb: m_after,
         m_dwg_after_wb: davinci::xyz_to_dwg() * m_after * davinci::dwg_to_xyz(),
         tps: None,
+        mixer: None,
         mean_matrix: 0.0,
         tps_check: None,
         matrix_check: None,
@@ -533,6 +555,50 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     let de = |f: &ChartFit, i: usize| delta_e_2000(&lab(&f.apply(&patches[i].xyz), &wn), &lab(&target[i], &wn));
     let mut fit = fit;
     fit.mean_matrix = used.iter().map(|&i| de(&fit, i)).sum::<f64>() / used.len() as f64;
+    if s.model == Model::Mixer {
+        let (space, pl) = (s.mixer_space, s.mixer_preserve);
+        let to_node = |x: &Vec3| -> Vec3 {
+            let d = davinci::xyz_to_dwg() * x;
+            match space {
+                MixerSpace::Di => d.map(di_encode),
+                MixerSpace::Linear => d,
+            }
+        };
+        // Seed: least squares in the node's values (each patch weighted like the fit).
+        let xs: Vec<Vec3> = used.iter().map(|&i| to_node(&patches[i].xyz)).collect();
+        let ys: Vec<Vec3> = used.iter().map(|&i| to_node(&target[i])).collect();
+        let wt: Vec<f64> = used.iter().map(|&i| weight(i)).collect();
+        let seed = least_squares(&xs, &ys, Some(&wt)).unwrap_or_else(Mat3::identity);
+        let resid = |q: &[f64]| -> Vec<f64> {
+            let mx = Mixer::from_params(q, space, pl);
+            let mut r = Vec::with_capacity(used.len() * 3 + 9);
+            for &i in &used {
+                let d = lab(&mx.apply_xyz(&patches[i].xyz), &wn) - lab(&target[i], &wn);
+                let w = weight(i).sqrt();
+                r.extend([d.x * w, d.y * w, d.z * w]);
+            }
+            if s.restraint > 0.0 {
+                // Towards the untouched mixer (identity).
+                let scale = 20.0 * s.restraint * (used.len() as f64 / 24.0).sqrt();
+                r.extend((mx.matrix() - Mat3::identity()).iter().map(|v| v * scale));
+            }
+            r
+        };
+        let cost = |q: &[f64]| resid(q).iter().map(|v| v * v).sum::<f64>();
+        let starts = [Mixer::with_preserve(seed, space, pl).params(), Mixer::with_preserve(Mat3::identity(), space, pl).params()];
+        let n = starts[0].len();
+        let (lo, hi) = (vec![f64::NEG_INFINITY; n], vec![f64::INFINITY; n]);
+        let best = starts
+            .iter()
+            .map(|q| bounded_lm(q, &lo, &hi, &resid, 300))
+            .min_by(|a, b| cost(a).total_cmp(&cost(b)))
+            .expect("two starts");
+        let mx = Mixer::from_params(&best, space, pl);
+        if mx.rows.iter().flatten().any(|v| v.abs() > 2.0) {
+            fit.notes.push("some RGB Mixer values are beyond ±2: Resolve's sliders may not reach them; Restraint keeps them smaller".into());
+        }
+        fit.mixer = Some(mx);
+    }
     if s.model.has_tps() {
         // In DI DWG, after the matrix (identity for TPS3D alone): a gray balance curve, then
         // the spline through the colour patches (all, or the six primaries) and the grays,
@@ -604,8 +670,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     if let (Some(c), Some(mc)) = (fit.tps_check, fit.matrix_check) {
         if c >= mc - 0.1 {
             fit.notes.push(format!(
-                "TPS3D predicts colours it wasn't fitted to no better than the matrix (cross-check {c:.1} vs matrix {mc:.1} ΔE2000): \
-                 between the patches it may not be more accurate"
+                "TPS3D matches the chart but predicts other colours no better than the 3×3 matrix (cross-check {c:.1} vs {mc:.1} ΔE2000)"
             ));
         }
     }
@@ -620,26 +685,28 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     fit.neutral_after = mean(&de_after, &neutrals);
     fit.neutral_gain = g;
     fit.de_after = de_after;
-    let w = fit.m_dwg * Vec3::repeat(1.0);
+    // What a clipped pixel (equal R, G, B, linear DWG) comes out as.
+    let w = davinci::xyz_to_dwg() * fit.apply(&(davinci::dwg_to_xyz() * Vec3::repeat(1.0)));
     if w.min() < 0.8 * w.max() {
         fit.notes.push(format!(
-            "equal R, G, B (clipped white) comes out R {:.2} : G {:.2} : B {:.2}: turn on highlight protection for the DCTL, \
-             or white-balance in the raw decode and tick the DCTL's “WB Done In Raw”",
+            "clipped white comes out tinted (R {:.2} : G {:.2} : B {:.2}): turn on Highlight protection{}",
             w.x / w.max(),
             w.y / w.max(),
-            w.z / w.max()
+            w.z / w.max(),
+            if s.model.has_matrix() { ", or white-balance in the raw decode and tick “WB Done In Raw” in the DCTL" } else { "" }
         ));
     }
     if fit.mean_after > 6.0 {
         fit.notes.push(format!(
-            "mean error after correction is {:.1} ΔE2000: the camera's colours differ from the chart in ways a {} can't \
-             undo (spectral differences, e.g. strongly coloured or filtered light, or a non-linear look baked into the still)",
+            "{:.1} ΔE2000 left after correcting: {} can't fully undo this camera's colours here (typical under strongly \
+             coloured or filtered light, or with a look baked into the still)",
             fit.mean_after,
             match s.model {
-                Model::Matrix => "3×3 matrix",
-                Model::MatrixTone => "matrix and tone curve",
-                Model::Tps => "colour-only spline through these patches",
-                Model::MatrixTps => "matrix and spline",
+                Model::Matrix => "a 3×3 matrix",
+                Model::MatrixTone => "a matrix and tone curve",
+                Model::Tps => "TPS3D",
+                Model::MatrixTps => "Matrix + TPS3D",
+                Model::Mixer => "an RGB Mixer",
             }
         ));
     }
@@ -951,6 +1018,32 @@ mod tests {
             let b = enc(&s.apply(&q.xyz));
             assert!((level(&a) - level(&b)).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn rgb_mixer_recovers_a_mixer_look() {
+        use crate::chart::mixer::{Mixer, MixerSpace};
+        // A camera whose DI values went through a mixer (rows sum to 1): the fit finds its
+        // inverse, with Preserve Luminance, exactly.
+        let look = Mixer::from_params(&[0.12, -0.05, 0.08, 0.04, -0.03, 0.1], MixerSpace::Di, true);
+        let p = patches(|t| look.apply_xyz(t));
+        let f = fit_chart(&p, &FitSettings { model: Model::Mixer, ..Default::default() }).unwrap();
+        let m = f.mixer.unwrap();
+        assert!(m.preserve_luminance && m.space == MixerSpace::Di);
+        for r in &m.rows {
+            assert!((r.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        }
+        assert!((m.matrix() * look.matrix() - Mat3::identity()).abs().max() < 1e-3, "{}", m.matrix() * look.matrix());
+        assert!(f.mean_after < 0.01, "{}", f.mean_after);
+        assert_eq!(f.m_xyz, Mat3::identity());
+        // Free rows can also white-balance a cast (in log); preserving ones can't fully.
+        let p = patches(|t| cast() * t);
+        let free = fit_chart(&p, &FitSettings { model: Model::Mixer, mixer_preserve: false, ..Default::default() }).unwrap();
+        let pres = fit_chart(&p, &FitSettings { model: Model::Mixer, ..Default::default() }).unwrap();
+        assert!(free.neutral_after < pres.neutral_after, "{} vs {}", free.neutral_after, pres.neutral_after);
+        // Linear: a mixer on linear values is a matrix in DWG.
+        let lin = fit_chart(&p, &FitSettings { model: Model::Mixer, mixer_preserve: false, mixer_space: MixerSpace::Linear, ..Default::default() }).unwrap();
+        assert!(lin.mean_after < free.mean_after + 3.0);
     }
 
     #[test]
