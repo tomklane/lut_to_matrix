@@ -251,6 +251,8 @@ fn chart_dctl_compiles_and_matches() {
         (Model::MatrixTps, true, false, false, false),
         (Model::Mixer, true, true, true, false),
         (Model::Mixer, false, false, true, false),
+        (Model::Nodes, true, true, true, false),
+        (Model::Nodes, false, false, true, false),
     ];
     for (model, preserve, protect, wb, tps) in cases {
         let s = ChartSettings {
@@ -284,7 +286,7 @@ fn chart_dctl_compiles_and_matches() {
         let src = a.dctl("2026-01-01").unwrap();
         assert!(src.is_ascii());
         assert_eq!(src.contains("TONE_P_R"), model == Model::MatrixTone && !tps);
-        let mixer = model == Model::Mixer;
+        let mixer = matches!(model, Model::Mixer | Model::Nodes);
         assert_eq!(src.contains("M_XYZ"), !tps && !mixer);
         assert_eq!(src.contains("MIX_RR"), mixer);
         assert_eq!(src.contains("TPS_C["), tps || model == Model::MatrixTps);
@@ -367,7 +369,7 @@ fn corrected_preview_differs_and_opendrt_display_works() {
     let lat = find_lattice(&img).unwrap();
     let decode = |jpg: &[u8]| ::image::load_from_memory(jpg).unwrap().to_rgb8();
     // Every model, both displays.
-    for model in [Model::Matrix, Model::MatrixTone, Model::Tps, Model::MatrixTps, Model::Mixer] {
+    for model in [Model::Matrix, Model::MatrixTone, Model::Tps, Model::MatrixTps, Model::Mixer, Model::Nodes] {
     let s = ChartSettings { fit: lutmatrix_core::chart::fit::FitSettings { model, mixer_preserve: false, ..Default::default() }, ..Default::default() };
     let a = analyze(&img, Some(&lat), &s).unwrap();
     let fit = a.fit.as_ref().unwrap();
@@ -439,7 +441,7 @@ fn every_setting_takes_effect() {
     assert!(a.target_name.starts_with("chart in") && fit_of(&a).mean_after < 0.05, "target chart");
 
     // Fit settings.
-    for m in [Model::MatrixTone, Model::Tps, Model::MatrixTps, Model::Mixer] {
+    for m in [Model::MatrixTone, Model::Tps, Model::MatrixTps, Model::Mixer, Model::Nodes] {
         assert!(!same_fit(&run(&with_fit(FitSettings { model: m, ..fd })), &base), "model {m:?}");
     }
     let a = run(&with_fit(FitSettings { exposure: Exposure::Keep, ..fd }));
@@ -460,6 +462,16 @@ fn every_setting_takes_effect() {
     ] {
         assert!(!same_fit(&run(&with_fit(f)), &t0), "{what}");
     }
+    let nd = FitSettings { model: Model::Nodes, ..fd };
+    let n0 = run(&with_fit(nd));
+    for (f, what) in [
+        (FitSettings { mixer_preserve: false, ..nd }, "nodes preserve"),
+        (FitSettings { restraint: 0.6, ..nd }, "nodes restraint"),
+        (FitSettings { exposure: Exposure::Keep, ..nd }, "nodes exposure"),
+    ] {
+        assert!(!same_fit(&run(&with_fit(f)), &n0), "{what}");
+    }
+    assert!(same_fit(&run(&with_fit(FitSettings { preserve_neutrals: true, lock_neutral: false, tps_smoothing: 0.1, ..nd })), &n0), "nodes changed by another model's settings");
     let mx = FitSettings { model: Model::Mixer, ..fd };
     let m0 = run(&with_fit(mx));
     for (f, what) in [

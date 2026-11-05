@@ -32,7 +32,7 @@ use crate::math::{whites, Mat3, Vec3};
 use crate::spaces::curves::di_encode;
 use crate::spaces::davinci;
 
-use super::mixer::{Mixer, MixerSpace};
+use super::mixer::{Mixer, MixerSpace, NodeChain, REC709_LUMA};
 use super::tps::{dedupe, fit_tps, identity_anchors, GrayCurve, Tps, TpsPoint};
 
 /// What happens to the chart's exposure.
@@ -60,6 +60,9 @@ pub enum Model {
     MatrixTps,
     /// Resolve's RGB Mixer: a 3×3 on the node's values (DI log by default) (D46).
     Mixer,
+    /// The two-node chain: a linear node with Gain and Saturation, then the RGB Mixer on
+    /// DI (D47).
+    Nodes,
 }
 
 impl Model {
@@ -224,6 +227,8 @@ pub struct ChartFit {
     pub tps: Option<Tps>,
     /// The RGB Mixer (model `Mixer`; the matrix is then the identity).
     pub mixer: Option<Mixer>,
+    /// The node chain (model `Nodes`; the matrix is then the identity).
+    pub chain: Option<NodeChain>,
     /// Mean ΔE2000 of the 3×3 matrix model on the same chart (for comparison).
     pub mean_matrix: f64,
     /// TPS3D: mean ΔE2000 when each patch is predicted by a spline fitted without it
@@ -245,9 +250,10 @@ impl ChartFit {
     }
 
     fn spline(&self, xyz: Vec3) -> Vec3 {
-        let xyz = match &self.mixer {
-            Some(m) => m.apply_xyz(&xyz),
-            None => xyz,
+        let xyz = match (&self.mixer, &self.chain) {
+            (Some(m), _) => m.apply_xyz(&xyz),
+            (None, Some(c)) => c.apply_xyz(&xyz),
+            (None, None) => xyz,
         };
         match &self.tps {
             Some(t) => t.apply_xyz(&xyz),
@@ -455,7 +461,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
     let (m, tone) = match (preserved, s.model) {
         (Some(r), _) => r,
         // TPS3D: no matrix, no white balance; the spline comes below.
-        (None, Model::Tps | Model::Mixer) => (Mat3::identity(), None),
+        (None, Model::Tps | Model::Mixer | Model::Nodes) => (Mat3::identity(), None),
         (None, Model::Matrix | Model::MatrixTps) => {
             let m0 = ls(None).ok_or("the measured patches don't span three colour dimensions")?;
             let m_wb = wb(None);
@@ -524,7 +530,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         }
     };
 
-    let wb_gains = if matches!(s.model, Model::Tps | Model::Mixer) { [1.0; 3] } else { balance(tone.as_ref()) };
+    let wb_gains = if matches!(s.model, Model::Tps | Model::Mixer | Model::Nodes) { [1.0; 3] } else { balance(tone.as_ref()) };
     let m_after = m * gains_xyz(wb_gains).try_inverse().unwrap_or_else(Mat3::identity);
     let fit = ChartFit {
         settings: *s,
@@ -535,6 +541,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
         m_dwg_after_wb: davinci::xyz_to_dwg() * m_after * davinci::dwg_to_xyz(),
         tps: None,
         mixer: None,
+        chain: None,
         mean_matrix: 0.0,
         tps_check: None,
         matrix_check: None,
@@ -598,6 +605,73 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
             fit.notes.push("some RGB Mixer values are beyond ±2: Resolve's sliders may not reach them; Restraint keeps them smaller".into());
         }
         fit.mixer = Some(mx);
+    }
+    if s.model == Model::Nodes {
+        let (space, pl) = (s.mixer_space, s.mixer_preserve);
+        // q = [ln gain R, G, B, saturation, mixer params…]; gains start at the gray balance
+        // (and exposure), saturation at 1, the mixer at identity.
+        let unpack = |q: &[f64]| NodeChain {
+            gains: [q[0].exp(), q[1].exp(), q[2].exp()],
+            saturation: q[3],
+            luma: REC709_LUMA,
+            mixer: Mixer::from_params(&q[4..], space, pl),
+        };
+        let resid = |q: &[f64]| -> Vec<f64> {
+            let c = unpack(q);
+            let mut r = Vec::with_capacity(used.len() * 3 + 10);
+            for &i in &used {
+                let d = lab(&c.apply_xyz(&patches[i].xyz), &wn) - lab(&target[i], &wn);
+                let w = weight(i).sqrt();
+                r.extend([d.x * w, d.y * w, d.z * w]);
+            }
+            if s.restraint > 0.0 {
+                // Towards an untouched mixer and saturation.
+                let scale = 20.0 * s.restraint * (used.len() as f64 / 24.0).sqrt();
+                r.extend((c.mixer.matrix() - Mat3::identity()).iter().map(|v| v * scale));
+                r.push((c.saturation - 1.0) * scale);
+            }
+            r
+        };
+        let idx = if mids.len() >= 2 { &mids } else { &neutrals };
+        let w = davinci::xyz_to_dwg() * idx.iter().map(|&i| patches[i].xyz).sum::<Vec3>();
+        let t = davinci::xyz_to_dwg() * idx.iter().map(|&i| target[i]).sum::<Vec3>();
+        let g0 = Vec3::new(t.x / w.x, t.y / w.y, t.z / w.z).map(|v| if v.is_finite() && v > 0.0 { v.ln() } else { 0.0 });
+        let id = Mixer::with_preserve(Mat3::identity(), space, pl).params();
+        let n = 4 + id.len();
+        // Saturation within Resolve's slider (0 … 100 = 0 … 2), gains within 1/64 … 64.
+        let mut lo = vec![-(64f64.ln()), -(64f64.ln()), -(64f64.ln()), 0.0];
+        let mut hi = vec![64f64.ln(), 64f64.ln(), 64f64.ln(), 2.0];
+        lo.resize(n, f64::NEG_INFINITY);
+        hi.resize(n, f64::INFINITY);
+        let cost = |q: &[f64]| resid(q).iter().map(|v| v * v).sum::<f64>();
+        let mut starts: Vec<Vec<f64>> =
+            [1.0, 1.4].iter().map(|&sat| [g0.x, g0.y, g0.z, sat].into_iter().chain(id.iter().copied()).collect()).collect();
+        // Free rows: also start from the Preserve Luminance fit (it is one of their solutions).
+        if !pl {
+            if let Ok(f) = fit_chart(patches, &FitSettings { mixer_preserve: true, ..*s }) {
+                if let Some(c) = f.chain {
+                    starts.push(
+                        [c.gains[0].ln(), c.gains[1].ln(), c.gains[2].ln(), c.saturation]
+                            .into_iter()
+                            .chain(c.mixer.rows.iter().flatten().copied())
+                            .collect(),
+                    );
+                }
+            }
+        }
+        let best = starts
+            .iter()
+            .map(|q0| bounded_lm(q0, &lo, &hi, &resid, 400))
+            .min_by(|a, b| cost(a).total_cmp(&cost(b)))
+            .expect("starts");
+        let c = unpack(&best);
+        if c.saturation >= 1.999 {
+            fit.notes.push("Saturation reached Resolve's maximum (100): the chain wanted more".into());
+        }
+        if c.mixer.rows.iter().flatten().any(|v| v.abs() > 2.0) {
+            fit.notes.push("some RGB Mixer values are beyond ±2: Resolve's sliders may not reach them; Restraint keeps them smaller".into());
+        }
+        fit.chain = Some(c);
     }
     if s.model.has_tps() {
         // In DI DWG, after the matrix (identity for TPS3D alone): a gray balance curve, then
@@ -707,6 +781,7 @@ pub fn fit_chart(patches: &[FitPatch], s: &FitSettings) -> Result<ChartFit, Stri
                 Model::Tps => "TPS3D",
                 Model::MatrixTps => "Matrix + TPS3D",
                 Model::Mixer => "an RGB Mixer",
+                Model::Nodes => "gain, saturation and an RGB Mixer",
             }
         ));
     }
@@ -1044,6 +1119,32 @@ mod tests {
         // Linear: a mixer on linear values is a matrix in DWG.
         let lin = fit_chart(&p, &FitSettings { model: Model::Mixer, mixer_preserve: false, mixer_space: MixerSpace::Linear, ..Default::default() }).unwrap();
         assert!(lin.mean_after < free.mean_after + 3.0);
+    }
+
+    #[test]
+    fn node_chain_recovers_gain_saturation_and_mixer() {
+        use crate::chart::mixer::{Mixer, MixerSpace, NodeChain, REC709_LUMA};
+        // A camera look made of the inverse chain: the fit finds a chain that undoes it.
+        let look = |t: &Vec3| -> Vec3 {
+            let m = Mixer::from_params(&[0.05, -0.03, 0.04, 0.02, -0.02, 0.06], MixerSpace::Di, true);
+            let c = NodeChain { gains: [0.5, 0.9, 1.1], saturation: 0.8, luma: REC709_LUMA, mixer: m };
+            c.apply_xyz(t)
+        };
+        let p = patches(look);
+        let f = fit_chart(&p, &FitSettings { model: Model::Nodes, ..Default::default() }).unwrap();
+        let c = f.chain.unwrap();
+        assert!(f.mean_after < 1.0, "{}", f.mean_after);
+        assert!(c.gains[0] > c.gains[1] && c.saturation > 1.0, "{c:?}");
+        assert_eq!(f.m_xyz, Mat3::identity());
+        for r in &c.mixer.rows {
+            assert!((r.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        }
+        assert!(c.text().contains("Saturation"));
+        // Better than the mixer alone on an underwater-like cast.
+        let p = patches(|t| cast() * t);
+        let n = fit_chart(&p, &FitSettings { model: Model::Nodes, ..Default::default() }).unwrap();
+        let m = fit_chart(&p, &FitSettings { model: Model::Mixer, ..Default::default() }).unwrap();
+        assert!(n.mean_after < m.mean_after, "{} vs {}", n.mean_after, m.mean_after);
     }
 
     #[test]

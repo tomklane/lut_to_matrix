@@ -6,6 +6,17 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-05
+
+### Added
+- **Gain + Mixer** chart model (DECISIONS D47): your two Resolve nodes, fitted together.
+  Node 1 (colour space gamma set to linear): Gain R, G, B and Saturation; node 2: the
+  RGB Mixer on DI values (Preserve Luminance optional). The app shows the values to
+  type into each node; Copy Values copies them; the DCTL does both. CLI: `--model nodes`.
+
+### Changed
+- The model buttons are laid out in a grid, so all six fit.
+
 ## [0.9.0] - 2026-11-05
 
 ### Added
@@ -274,7 +285,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters. Bit-identical to the compiled DCTL in tests (479 configurations), plus a
   committed reference fixture for platforms without a C++ compiler.
 
-[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/tomklane/lut_to_matrix/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tomklane/lut_to_matrix/compare/v0.6.0...v0.7.0

@@ -36,7 +36,7 @@ pub struct ChartArgs {
     /// after2014 or before2014.
     #[arg(long, default_value = "after2014")]
     edition: String,
-    /// matrix, tone (matrix + per-channel tone curve) tps (TPS3D, colour only, no matrix), matrix-tps (matrix, then TPS3D) or mixer (Resolve's RGB Mixer).
+    /// matrix, tone (matrix + per-channel tone curve) tps (TPS3D, colour only, no matrix), matrix-tps (matrix, then TPS3D), mixer (Resolve's RGB Mixer) or nodes (linear Gain + Saturation, then the RGB Mixer on DI).
     #[arg(long, default_value = "matrix")]
     model: String,
     /// match (correct the exposure too) or keep.
@@ -187,6 +187,7 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
         "tps" | "tps3d" => Model::Tps,
         "matrix-tps" => Model::MatrixTps,
         "mixer" => Model::Mixer,
+        "nodes" => Model::Nodes,
         m => return Err(format!("unknown model '{m}'")),
     };
     s.fit.exposure = match args.exposure.as_str() {
@@ -327,7 +328,11 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
                 ratio(&f.m_dwg),
                 ratio(&f.m_dwg_after_wb)
             );
-            if let Some(m) = &f.mixer {
+            if let Some(c) = &f.chain {
+                for line in c.text().lines() {
+                    println!("  Nodes       {line}");
+                }
+            } else if let Some(m) = &f.mixer {
                 for line in m.text().lines() {
                     println!("  RGB Mixer   {line}");
                 }

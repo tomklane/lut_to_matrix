@@ -139,7 +139,7 @@ impl Highlights {
         // TPS3D always balances (its gray curve), there is no switch. An RGB Mixer with
         // Preserve Luminance keeps equal R, G, B: clipped pixels go to equal R, G, B.
         let white_balance = white_balance || fit.settings.model == super::fit::Model::Tps;
-        if fit.mixer.is_some_and(|m| m.preserve_luminance) {
+        if fit.settings.model == super::fit::Model::Mixer && fit.mixer.is_some_and(|m| m.preserve_luminance) {
             return Vec3::repeat(1.0);
         }
         if white_balance && g.iter().all(|v| v.is_finite() && *v > 1e-6) {

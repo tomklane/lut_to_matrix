@@ -332,7 +332,7 @@
   async function copyMatrix() {
     try {
       await copyText(await api.chartMatrixText());
-      app.notify(mixer ? "Mixer values copied" : "Matrix copied");
+      app.notify(mixer || nodes ? "Values copied" : "Matrix copied");
     } catch (e) {
       app.notify(String(e), "error");
     }
@@ -387,6 +387,7 @@
   const tps = $derived(app.chart.fit.model === "tps");
   const hasTps = $derived(app.chart.fit.model === "tps" || app.chart.fit.model === "matrix_tps");
   const mixer = $derived(app.chart.fit.model === "mixer");
+  const nodes = $derived(app.chart.fit.model === "nodes");
   const keepsExposure = $derived(tps || mixer);
   // Equal R, G, B through the matrix (linear DWG), brightest channel = 1.
   function whiteThrough(m: number[][]): number[] | null {
@@ -681,7 +682,7 @@
       <div>
         <div class="group-title">Correction</div>
         <div class="group">
-          <div class="row">
+          <div class="row model">
             <div class="label">Model</div>
             <div class="value">
               <Segmented
@@ -693,6 +694,7 @@
                   { value: "tps", label: "TPS3D", title: "A thin-plate spline through the patches; colour only, no matrix" },
                   { value: "matrix_tps", label: "Matrix + TPS3D", title: "The matrix, then TPS3D on what's left" },
                   { value: "mixer", label: "RGB Mixer", title: "Values for Resolve's RGB Mixer" },
+                  { value: "nodes", label: "Gain + Mixer", title: "Your Resolve nodes: Gain and Saturation in a linear node, then the RGB Mixer on DI" },
                 ]}
               />
             </div>
@@ -711,13 +713,13 @@
               />
             </div>
           </div>
-          {#if mixer}
+          {#if mixer || nodes}
           <div class="row">
             <div class="label">Preserve Luminance<div class="sub">As in Resolve: each output's sliders add up to 1</div></div>
             <div class="value"><Toggle bind:checked={app.chart.fit.mixer_preserve} label="Preserve Luminance" /></div>
           </div>
           <div class="row">
-            <div class="label">Node works on<div class="sub">DI log is a normal node in a DWG/DI timeline</div></div>
+            <div class="label">{nodes ? "Mixer node works on" : "Node works on"}<div class="sub">DI log is a normal node in a DWG/DI timeline</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.mixer_space}
@@ -730,7 +732,7 @@
             </div>
           </div>
           {/if}
-          {#if !tps && !mixer}
+          {#if !tps && !mixer && !nodes}
           <div class="row">
             <div class="label">
               Preserve neutrals<div class="sub">Keeps white white when the white balance is done in raw</div>
@@ -746,7 +748,7 @@
           {/if}
           {#if !tps}
           <div class="row">
-            <div class="label">Restraint<div class="sub">{mixer ? "Smaller mixer values" : "A gentler matrix: less noise in weak channels"}</div></div>
+            <div class="label">Restraint<div class="sub">{mixer || nodes ? "Smaller mixer values, less noise" : "A gentler matrix: less noise in weak channels"}</div></div>
             <div class="value">
               <Segmented
                 bind:value={app.chart.fit.restraint}
@@ -799,6 +801,25 @@
             </div>
           {/if}
           {/if}
+          {#if f?.chain}
+            <div class="row">
+              <div class="label">Node 1<div class="sub">Colour space gamma set to linear</div></div>
+              <div class="value num small nowrap">
+                Gain R {fmt(f.chain.gains[0], 3)} · G {fmt(f.chain.gains[1], 3)} · B {fmt(f.chain.gains[2], 3)} · Saturation {fmt(50 * f.chain.saturation, 1)}
+              </div>
+            </div>
+            <div class="row mat">
+              <div class="label">Node 2: RGB Mixer<div class="sub">On {f.chain.mixer.space === "di" ? "DI" : "linear"} values, Preserve Luminance {f.chain.mixer.preserve_luminance ? "on" : "off"}</div></div>
+              <div class="value num">
+                <table class="mixer">
+                  <thead><tr><th></th><th>R</th><th>G</th><th>B</th></tr></thead>
+                  <tbody>
+                    {#each f.chain.mixer.rows as r, k}<tr><th>{["Red", "Green", "Blue"][k]} Output</th>{#each r as v}<td>{fmt(v, 2)}</td>{/each}</tr>{/each}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {/if}
           {#if f?.mixer}
             <div class="row mat">
               <div class="label">RGB Mixer<div class="sub">Type these into Resolve's RGB Mixer (Preserve Luminance {f.mixer.preserve_luminance ? "on" : "off"})</div></div>
@@ -812,7 +833,7 @@
               </div>
             </div>
           {/if}
-          {#if f && !tps && !mixer}
+          {#if f && !tps && !mixer && !nodes}
             <div class="row mat">
               <div class="label">Matrix<div class="sub">In linear DWG, after the {f.tone ? "tone curve and " : ""}white balance</div></div>
               <div class="value num">
@@ -897,7 +918,7 @@
           {/if}
           <div class="row go">
             <span class="grow"></span>
-            <button class="btn" onclick={copyMatrix} disabled={!f || tps}><Icon name="copy" size={14} /> {mixer ? "Copy Values" : "Copy Matrix"}</button>
+            <button class="btn" onclick={copyMatrix} disabled={!f || tps}><Icon name="copy" size={14} /> {mixer || nodes ? "Copy Values" : "Copy Matrix"}</button>
             <button class="btn primary" onclick={exportDctl} disabled={!f}><Icon name="export" size={14} /> Export DCTL…</button>
           </div>
         </div>
@@ -1324,6 +1345,17 @@
     color: var(--label-2);
     text-align: right;
     padding-right: 8px;
+  }
+  .row.model {
+    flex-wrap: wrap;
+  }
+  .row.model > .value {
+    flex: 1 1 100%;
+  }
+  .row.model :global(.seg) {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    width: 100%;
   }
   .nowrap {
     white-space: nowrap;

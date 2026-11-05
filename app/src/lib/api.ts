@@ -435,7 +435,7 @@ export interface LoadedStill {
   found: number;
 }
 export interface ChartFitSettings {
-  model: "matrix" | "matrix_tone" | "tps" | "matrix_tps" | "mixer";
+  model: "matrix" | "matrix_tone" | "tps" | "matrix_tps" | "mixer" | "nodes";
   exposure: "match" | "keep";
   lock_neutral: boolean;
   neutral_weight: number;
@@ -527,6 +527,11 @@ export interface CurveFit {
   rms_stops: number;
   score: number;
 }
+export interface ChartMixer {
+  rows: [number, number, number][];
+  space: "di" | "linear";
+  preserve_luminance: boolean;
+}
 export interface ChartFit {
   settings: ChartFitSettings;
   m_xyz: Mat3;
@@ -553,7 +558,9 @@ export interface ChartFit {
   /** TPS3D: each patch predicted by a spline fitted without it; the same for the matrix. */
   tps_check: number | null;
   matrix_check: number | null;
-  mixer: { rows: [number, number, number][]; space: "di" | "linear"; preserve_luminance: boolean } | null;
+  mixer: ChartMixer | null;
+  /** The node chain: linear Gain + Saturation, then the RGB Mixer. */
+  chain: { gains: [number, number, number]; saturation: number; luma: [number, number, number]; mixer: ChartMixer } | null;
   notes: string[];
 }
 export interface ChartAnalysis {

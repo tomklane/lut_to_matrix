@@ -431,6 +431,14 @@ impl ChartAnalysis {
             model: match f.settings.model {
                 fit::Model::Matrix => "3x3 matrix in XYZ".to_string(),
                 fit::Model::MatrixTone => "per-channel tone curve in linear DWG + 3x3 matrix in XYZ".to_string(),
+                fit::Model::Nodes => format!(
+                    "Resolve node chain: linear node with Gain and Saturation, then RGB Mixer on {} values{}",
+                    match f.settings.mixer_space {
+                        mixer::MixerSpace::Di => "DaVinci Intermediate",
+                        mixer::MixerSpace::Linear => "linear DWG",
+                    },
+                    if f.settings.mixer_preserve { ", Preserve Luminance" } else { "" }
+                ),
                 fit::Model::Mixer => format!(
                     "RGB Mixer on {} values{}",
                     match f.settings.mixer_space {
@@ -448,7 +456,7 @@ impl ChartAnalysis {
                     },
                     f.settings.tps_smoothing
                 ),
-            } + if matches!(f.settings.model, fit::Model::Tps | fit::Model::Mixer) {
+            } + if matches!(f.settings.model, fit::Model::Tps | fit::Model::Mixer | fit::Model::Nodes) {
                 ""
             } else if f.settings.preserve_neutrals {
                 ", neutrals preserved after the white balance (equal RGB stays equal)"
