@@ -82,6 +82,14 @@ pub struct ChartArgs {
     /// Highlight protection transition below the clip, stops.
     #[arg(long, default_value_t = 1.0)]
     highlight_softness: f64,
+    /// No gamut compression after the correction (it is on by default: colours pushed
+    /// outside the gamut are pulled back smoothly instead of clipping).
+    #[arg(long)]
+    no_gamut_compress: bool,
+    /// Where gamut compression starts, 0.5 … 0.98 (default: just above the chart's most
+    /// saturated colour).
+    #[arg(long)]
+    gamut_threshold: Option<f64>,
     /// The DCTL's white balance checkbox starts off (footage white-balanced in the raw
     /// decode).
     #[arg(long)]
@@ -219,6 +227,8 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
     s.highlights.enabled = args.protect_highlights;
     s.highlights.clip_di = args.clip_di;
     s.highlights.softness = args.highlight_softness;
+    s.gamut.enabled = !args.no_gamut_compress;
+    s.gamut.threshold = args.gamut_threshold;
     s.white_balance = !args.no_white_balance;
     if let Some(t) = &args.target {
         let ts = ChartSettings { space: None, corners: None, orientation: None, exclude: Vec::new(), ..s.clone() };
@@ -383,6 +393,19 @@ pub fn run(args: ChartArgs) -> Result<(), String> {
         if h.source == lutmatrix_core::chart::highlights::ClipSource::Set { format!("; still {:.4} {:?}", h.measured_di, h.measured_source) } else { String::new() },
         if h.enabled { format!("; protection on, softness {:.2} stops", h.softness) } else { "; protection off".into() }
     );
+    let g = &a.gamut;
+    if a.fit.is_some() {
+        println!(
+            "  Gamut       {:.2}% of the still pushed outside{}; threshold {:.3}{}, limits R {:.2} G {:.2} B {:.2}",
+            100.0 * g.outside,
+            if g.enabled { format!(" ({:.2}% with compression)", 100.0 * g.outside_after) } else { "; compression off".into() },
+            g.threshold,
+            if (g.threshold - g.auto_threshold).abs() > 1e-9 { format!(" (chart {:.3})", g.auto_threshold) } else { String::new() },
+            g.limits[0],
+            g.limits[1],
+            g.limits[2]
+        );
+    }
     for n in &a.notes {
         println!("  Note        {n}");
     }

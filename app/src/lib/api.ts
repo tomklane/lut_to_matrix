@@ -461,6 +461,23 @@ export interface HighlightSettings {
   strength: number;
 }
 export const defaultHighlights: HighlightSettings = { enabled: false, clip_di: null, softness: 1, strength: 1 };
+/** Gamut compression after the correction (DCTL and preview). */
+export interface GamutSettings {
+  enabled: boolean;
+  /** Where compression starts (0.5 … 0.98); null = just above the chart's colours. */
+  threshold: number | null;
+}
+export const defaultGamut: GamutSettings = { enabled: true, threshold: null };
+export interface ChartGamut {
+  enabled: boolean;
+  threshold: number;
+  auto_threshold: number;
+  chart_reach: number;
+  limits: [number, number, number];
+  /** Share of the still's pixels pushed outside the gamut, before / with compression. */
+  outside: number;
+  outside_after: number;
+}
 export type ClipSource = "set" | "measured" | "brightest" | "default";
 export interface Highlights {
   enabled: boolean;
@@ -482,6 +499,7 @@ export interface ChartSettings {
   mirrors: boolean;
   fit: ChartFitSettings;
   highlights: HighlightSettings;
+  gamut: GamutSettings;
   /** The DCTL's white balance checkbox starts on. */
   white_balance: boolean;
 }
@@ -606,6 +624,7 @@ export interface ChartAnalysis {
   fit: ChartFit | null;
   fit_error: string | null;
   highlights: Highlights;
+  gamut: ChartGamut;
   white_balance: boolean;
   notes: string[];
 }

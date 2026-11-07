@@ -8,6 +8,7 @@
 use std::fmt::Write as _;
 
 use super::fit::{ChartFit, Model, TONE_TOE};
+use super::gamut::{Gamut, POWER as GAMUT_POWER, THRESHOLD_RANGE as GAMUT_RANGE};
 use super::highlights::{ClipSource, Highlights, CLIP_DI_RANGE, SOFTNESS_RANGE};
 use super::mixer::{Mixer, MixerSpace, NodeChain};
 use super::tps::Tps;
@@ -28,16 +29,16 @@ pub struct ChartMeta {
     pub date: String,
 }
 
-pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &ChartMeta) -> String {
+pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, gamut: &Gamut, white_balance: bool, meta: &ChartMeta) -> String {
     if let (Some(t), Model::Tps) = (&fit.tps, fit.settings.model) {
-        return tps_dctl(t, fit.gray_dwg, hl, meta);
+        return tps_dctl(t, fit.gray_dwg, hl, gamut, meta);
     }
     if let Some(ch) = &fit.chain {
-        return chain_dctl(ch, fit.gray_dwg, hl, meta);
+        return chain_dctl(ch, fit.gray_dwg, hl, gamut, meta);
     }
     if let Some(m) = &fit.mixer {
         let white = super::highlights::Highlights::camera_white(fit, true);
-        return mixer_dctl(m, [white.x, white.y, white.z], hl, meta);
+        return mixer_dctl(m, [white.x, white.y, white.z], hl, gamut, meta);
     }
     let mut s = String::new();
     let w = &mut s;
@@ -77,6 +78,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
         let _ = writeln!(w, "// instead of the colour the correction would give them.");
         let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&src));
     }
+    gamut_text(w, gamut);
     let _ = writeln!(w, "//");
     let _ = writeln!(w, "// DWG primaries R(0.8000, 0.3130) G(0.1682, 0.9877) B(0.0790, -0.1155), white");
     let _ = writeln!(w, "// D65 (0.3127, 0.3290), and the DaVinci Intermediate constants are from");
@@ -103,6 +105,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
             f(SOFTNESS_RANGE.1)
         );
     }
+    gamut_params(w, gamut);
     let _ = writeln!(w);
     let _ = writeln!(w, "typedef struct");
     let _ = writeln!(w, "{{");
@@ -181,6 +184,7 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     if let Some(t) = &fit.tps {
         tps_defs(w, t);
     }
+    gamut_fns(w, gamut);
     let _ = writeln!(w, "__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)");
     let _ = writeln!(w, "{{");
     let _ = writeln!(w, "    // DaVinci Intermediate -> linear DaVinci Wide Gamut -> XYZ");
@@ -220,6 +224,10 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
         let _ = writeln!(w, "        fit = mat_mul(DWG_TO_XYZ(), make_float3(di_to_linear(d.x), di_to_linear(d.y), di_to_linear(d.z)));");
         let _ = writeln!(w, "    }}");
     }
+    if gamut.enabled {
+        let _ = writeln!(w, "    // Gamut compression (linear DWG)");
+        let _ = writeln!(w, "    if (!p_GamutOff) fit = mat_mul(DWG_TO_XYZ(), gamut_compress(mat_mul(XYZ_TO_DWG(), fit), p_GamutThr));");
+    }
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    xyz = make_float3(xyz.x + (fit.x - xyz.x) * p_Amount,");
     let _ = writeln!(w, "                      xyz.y + (fit.y - xyz.y) * p_Amount,");
@@ -231,6 +239,74 @@ pub fn chart_dctl(fit: &ChartFit, hl: &Highlights, white_balance: bool, meta: &C
     let _ = writeln!(w, "}}");
     debug_assert!(s.is_ascii());
     s
+}
+
+/// Gamut compression in the DCTL's header comment (D49).
+fn gamut_text(w: &mut String, g: &Gamut) {
+    if !g.enabled {
+        return;
+    }
+    let _ = writeln!(w, "//");
+    let _ = writeln!(w, "// Gamut compression (after the correction, linear DWG; ACES Reference Gamut");
+    let _ = writeln!(w, "// Compression, ACES 1.3): colours the correction pushes outside the gamut (a channel");
+    let _ = writeln!(w, "// below 0) are pulled back smoothly instead of clipping. Per channel, the distance");
+    let _ = writeln!(w, "// d = (max - c) / max is kept below 'Gamut Threshold' (default: just above the");
+    let _ = writeln!(w, "// chart's most saturated colour) and compressed above it so that the limit lands on");
+    let _ = writeln!(w, "// the gamut edge. Limits R {:.3} G {:.3} B {:.3}: how far the correction pushes the", g.limits[0], g.limits[1], g.limits[2]);
+    let _ = writeln!(w, "// chart still's pixels (99.9th percentile). Tick 'Gamut Compress Off' to compare.");
+}
+
+fn gamut_params(w: &mut String, g: &Gamut) {
+    if !g.enabled {
+        return;
+    }
+    let _ = writeln!(w, "DEFINE_UI_PARAMS(p_GamutOff, Gamut Compress Off, DCTLUI_CHECK_BOX, 0)");
+    let _ = writeln!(
+        w,
+        "DEFINE_UI_PARAMS(p_GamutThr, Gamut Threshold, DCTLUI_SLIDER_FLOAT, {:.4}, {:.4}, {:.4}, 0.001)",
+        g.threshold, GAMUT_RANGE.0, GAMUT_RANGE.1
+    );
+}
+
+fn gamut_fns(w: &mut String, g: &Gamut) {
+    if !g.enabled {
+        return;
+    }
+    let _ = writeln!(w, "// Gamut compression limits per channel and the curve's power (ACES RGC).");
+    for (k, ch) in ["R", "G", "B"].iter().enumerate() {
+        let _ = writeln!(w, "#define GAMUT_LIM_{ch} {}", lit(g.limits[k]));
+    }
+    let _ = writeln!(w, "#define GAMUT_PWR   {}", lit(GAMUT_POWER));
+    let _ = writeln!(w);
+    let _ = writeln!(w, "__DEVICE__ float gamut_dist(float d, float thr, float lim)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    if (d < thr || lim <= 1.0f || thr >= 1.0f || lim <= thr) return d;");
+    let _ = writeln!(w, "    float s = (lim - thr) / _powf(_powf((1.0f - thr) / (lim - thr), -GAMUT_PWR) - 1.0f, 1.0f / GAMUT_PWR);");
+    let _ = writeln!(w, "    float x = (d - thr) / s;");
+    let _ = writeln!(w, "    return thr + s * x / _powf(1.0f + _powf(x, GAMUT_PWR), 1.0f / GAMUT_PWR);");
+    let _ = writeln!(w, "}}");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "__DEVICE__ float3 gamut_compress(float3 c, float thr)");
+    let _ = writeln!(w, "{{");
+    let _ = writeln!(w, "    float a = _fmaxf(c.x, _fmaxf(c.y, c.z));");
+    let _ = writeln!(w, "    if (a <= 0.0f) return c;");
+    let _ = writeln!(w, "    return make_float3(a - gamut_dist((a - c.x) / a, thr, GAMUT_LIM_R) * a,");
+    let _ = writeln!(w, "                       a - gamut_dist((a - c.y) / a, thr, GAMUT_LIM_G) * a,");
+    let _ = writeln!(w, "                       a - gamut_dist((a - c.z) / a, thr, GAMUT_LIM_B) * a);");
+    let _ = writeln!(w, "}}");
+    let _ = writeln!(w);
+}
+
+/// Gamut compression of a DI value `v` (DCTL statement), for the DCTLs that end in DI.
+fn gamut_call_di(w: &mut String, g: &Gamut, v: &str) {
+    if !g.enabled {
+        return;
+    }
+    let _ = writeln!(w, "    // Gamut compression (linear DWG)");
+    let _ = writeln!(w, "    if (!p_GamutOff) {{");
+    let _ = writeln!(w, "        float3 gl = gamut_compress(make_float3(di_to_linear({v}.x), di_to_linear({v}.y), di_to_linear({v}.z)), p_GamutThr);");
+    let _ = writeln!(w, "        {v} = make_float3(linear_to_di(gl.x), linear_to_di(gl.y), linear_to_di(gl.z));");
+    let _ = writeln!(w, "    }}");
 }
 
 fn header(w: &mut String, title: &str, meta: &ChartMeta) {
@@ -313,7 +389,7 @@ fn clip_source(hl: &Highlights) -> String {
 }
 
 /// The node-chain DCTL: the two Resolve nodes in one (D47).
-fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> String {
+fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, gamut: &Gamut, meta: &ChartMeta) -> String {
     let mut s = String::new();
     let w = &mut s;
     header(w, "chart correction (Resolve nodes: Gain + Saturation in linear, RGB Mixer)", meta);
@@ -322,8 +398,9 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
     for line in ch.text().lines() {
         let _ = writeln!(w, "//   {line}");
     }
-    let _ = writeln!(w, "// Saturation: out = Y + s * (in - Y), Y with Rec. 709 luma weights (ITU-R BT.709-6), s =");
-    let _ = writeln!(w, "// slider / 50 (assumed to be Resolve's formula).");
+    let _ = writeln!(w, "// Saturation as Resolve does it in a linear node (measured, DECISIONS D47): on the");
+    let _ = writeln!(w, "// square roots t of the linear values, out = max(Y + s * (t - Y), 0)^2, Y = LUMA . t,");
+    let _ = writeln!(w, "// s = slider / 50.");
     if hl.enabled {
         let _ = writeln!(w, "//");
         let _ = writeln!(w, "// Highlight protection: each channel within 'Highlight Softness' stops of");
@@ -331,6 +408,7 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
         let _ = writeln!(w, "// out white.");
         let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&clip_source(hl)));
     }
+    gamut_text(w, gamut);
     let _ = writeln!(w, "//");
     let _ = writeln!(w, "// The DaVinci Intermediate constants are from Blackmagic Design, \"DaVinci Wide");
     let _ = writeln!(w, "// Gamut Intermediate\" v1.1 (2021-07-31).");
@@ -340,6 +418,7 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
     if hl.enabled {
         highlight_params(w, hl);
     }
+    gamut_params(w, gamut);
     let _ = writeln!(w);
     di_functions(w);
     if hl.enabled {
@@ -364,6 +443,7 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
         }
     }
     let _ = writeln!(w);
+    gamut_fns(w, gamut);
     let _ = writeln!(w, "__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)");
     let _ = writeln!(w, "{{");
     let _ = writeln!(w, "    float3 dwg = make_float3(di_to_linear(p_R), di_to_linear(p_G), di_to_linear(p_B));");
@@ -395,6 +475,7 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
     if ch.mixer.space == MixerSpace::Linear {
         let _ = writeln!(w, "    o = make_float3(linear_to_di(o.x), linear_to_di(o.y), linear_to_di(o.z));");
     }
+    gamut_call_di(w, gamut, "o");
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    return make_float3(p_R + (o.x - p_R) * p_Amount, p_G + (o.y - p_G) * p_Amount, p_B + (o.z - p_B) * p_Amount);");
     let _ = writeln!(w, "}}");
@@ -403,7 +484,7 @@ fn chain_dctl(ch: &NodeChain, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta)
 }
 
 /// The RGB Mixer DCTL: Resolve's RGB Mixer with the fitted values (D46).
-fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> String {
+fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, gamut: &Gamut, meta: &ChartMeta) -> String {
     let mut s = String::new();
     let w = &mut s;
     header(w, "chart correction (RGB Mixer, as in DaVinci Resolve)", meta);
@@ -425,6 +506,7 @@ fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> 
         let _ = writeln!(w, "// out the colour the mixer gives white.");
         let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&clip_source(hl)));
     }
+    gamut_text(w, gamut);
     let _ = writeln!(w, "//");
     let _ = writeln!(w, "// The DaVinci Intermediate constants are from Blackmagic Design, \"DaVinci Wide");
     let _ = writeln!(w, "// Gamut Intermediate\" v1.1 (2021-07-31).");
@@ -434,6 +516,7 @@ fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> 
     if hl.enabled {
         highlight_params(w, hl);
     }
+    gamut_params(w, gamut);
     let _ = writeln!(w);
     di_functions(w);
     if hl.enabled {
@@ -449,6 +532,7 @@ fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> 
         }
     }
     let _ = writeln!(w);
+    gamut_fns(w, gamut);
     let _ = writeln!(w, "__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)");
     let _ = writeln!(w, "{{");
     let _ = writeln!(w, "    float3 dwg = make_float3(di_to_linear(p_R), di_to_linear(p_G), di_to_linear(p_B));");
@@ -474,6 +558,7 @@ fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> 
     if m.space == MixerSpace::Linear {
         let _ = writeln!(w, "    o = make_float3(linear_to_di(o.x), linear_to_di(o.y), linear_to_di(o.z));");
     }
+    gamut_call_di(w, gamut, "o");
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    return make_float3(p_R + (o.x - p_R) * p_Amount, p_G + (o.y - p_G) * p_Amount, p_B + (o.z - p_B) * p_Amount);");
     let _ = writeln!(w, "}}");
@@ -482,7 +567,7 @@ fn mixer_dctl(m: &Mixer, white: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> 
 }
 
 /// The TPS3D DCTL: the spline alone, no matrix (D44).
-fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> String {
+fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, gamut: &Gamut, meta: &ChartMeta) -> String {
     let mut s = String::new();
     let w = &mut s;
     header(w, "chart correction (TPS3D: gray curve + thin-plate spline, no matrix)", meta);
@@ -504,6 +589,7 @@ fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> Strin
         let _ = writeln!(w, "// the gray curve makes neutral and the spline leaves alone: clipped areas go white.");
         let _ = writeln!(w, "// Clip level {:.4} DI: {}.", hl.clip_di, c(&clip_source(hl)));
     }
+    gamut_text(w, gamut);
     let _ = writeln!(w, "//");
     let _ = writeln!(w, "// The DaVinci Intermediate constants are from Blackmagic Design, \"DaVinci Wide");
     let _ = writeln!(w, "// Gamut Intermediate\" v1.1 (2021-07-31).");
@@ -513,6 +599,7 @@ fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> Strin
     if hl.enabled {
         highlight_params(w, hl);
     }
+    gamut_params(w, gamut);
     let _ = writeln!(w);
     di_functions(w);
     if hl.enabled {
@@ -524,6 +611,7 @@ fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> Strin
         rebuild_fn(w);
     }
     tps_defs(w, t);
+    gamut_fns(w, gamut);
     let _ = writeln!(w, "__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)");
     let _ = writeln!(w, "{{");
     let _ = writeln!(w, "    float3 d = make_float3(p_R, p_G, p_B);");
@@ -539,6 +627,7 @@ fn tps_dctl(t: &Tps, gray: [f64; 3], hl: &Highlights, meta: &ChartMeta) -> Strin
     }
     tps_eval(w, t, "    ");
     let _ = writeln!(w);
+    gamut_call_di(w, gamut, "d");
     let _ = writeln!(w, "    // Blend with the input (p_Amount = 0 is a no-op)");
     let _ = writeln!(w, "    return make_float3(p_R + (d.x - p_R) * p_Amount, p_G + (d.y - p_G) * p_Amount, p_B + (d.z - p_B) * p_Amount);");
     let _ = writeln!(w, "}}");

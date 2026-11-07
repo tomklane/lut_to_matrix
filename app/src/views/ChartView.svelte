@@ -958,6 +958,43 @@
             </div>
             <div class="row"><div class="faint small">Also adjustable in the DCTL.</div></div>
           {/if}
+          <div class="row">
+            <div class="label">
+              Gamut compression<div class="sub">
+                Pulls colours the correction pushes out of gamut back in, instead of clipping{#if a?.fit}
+                  {" · "}{fmt(100 * a.gamut.outside, 1)}% of this still is pushed out{#if app.chart.gamut.enabled}, {fmt(100 * a.gamut.outside_after, 2)}% with it{/if}
+                {/if}
+              </div>
+            </div>
+            <div class="value"><Toggle bind:checked={app.chart.gamut.enabled} label="Gamut compression" /></div>
+          </div>
+          {#if app.chart.gamut.enabled}
+            <div class="row">
+              <div class="label">
+                Starts at<div class="sub">
+                  Distance from neutral (1 = gamut edge){#if a}{" · "}chart's colours reach {fmt(a.gamut.chart_reach, 2)}{/if}
+                </div>
+              </div>
+              <div class="value">
+                <input
+                  type="number"
+                  class="clip"
+                  min="0.5"
+                  max="0.98"
+                  step="0.01"
+                  value={(app.chart.gamut.threshold ?? a?.gamut.threshold ?? 0.8).toFixed(2)}
+                  onchange={(e) => {
+                    const v = Number((e.currentTarget as HTMLInputElement).value);
+                    if (Number.isFinite(v)) app.chart.gamut.threshold = Math.min(0.98, Math.max(0.5, v));
+                  }}
+                  aria-label="Gamut compression threshold"
+                />
+                {#if app.chart.gamut.threshold !== null}
+                  <button class="btn plain" onclick={() => (app.chart.gamut.threshold = null)} title="Just above the chart's most saturated colour">Auto</button>
+                {/if}
+              </div>
+            </div>
+          {/if}
           <div class="row go">
             <span class="grow"></span>
             <button class="btn" onclick={copyMatrix} disabled={!f || tps}><Icon name="copy" size={14} /> {mixer || nodes ? "Copy Values" : "Copy Matrix"}</button>

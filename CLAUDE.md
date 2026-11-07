@@ -33,7 +33,7 @@ crates/lutmatrix-core      all colour math, LUT I/O, fitting, DCTL generation. N
   src/chart/               colour-chart matching (D38–D47): image reading (TIFF/EXR/PNG/
                            JPEG/DPX), chart detection + sampling, reference patches,
                            still encoding detection, matrix/tone fit + DCTL, OpenDRT preset,
-                           highlights.rs: DCTL highlight protection; tps.rs: TPS3D (gray curve + spline);
+                           highlights.rs: DCTL highlight protection; gamut.rs: gamut compression; tps.rs: TPS3D (gray curve + spline);
                            mixer.rs: Resolve RGB Mixer and node chain models
 crates/lutmatrix-opendrt   Rust port of OpenDRT v1.1.0 (GPLv3). f32, operation-for-operation;
   opendrt/                 the DCTL it follows (unmodified; read DECISIONS D27 first)

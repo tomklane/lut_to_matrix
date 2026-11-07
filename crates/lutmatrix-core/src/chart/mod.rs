@@ -14,6 +14,7 @@ pub mod dctl;
 pub mod detect;
 pub mod encoding;
 pub mod fit;
+pub mod gamut;
 pub mod highlights;
 pub mod image;
 pub mod mixer;
@@ -26,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use self::detect::{clip_levels, find_lattice, placements, sample_patch, ClipLevels, Lattice, Orientation, PatchSample, Placement};
 use self::encoding::{guess_space, SpaceGuess, StillSpace};
 use self::fit::{fit_chart, ChartFit, FitPatch, FitSettings};
+use self::gamut::{Gamut, GamutSettings};
 use self::highlights::{HighlightSettings, Highlights};
 use self::image::{ChartImage, ImageInfo};
 use self::reference::{ChartEdition, NEUTRALS, PATCH_NAMES};
@@ -71,6 +73,8 @@ pub struct ChartSettings {
     pub target: Target,
     /// Highlight protection in the DCTL.
     pub highlights: HighlightSettings,
+    /// Gamut compression after the correction (DCTL and preview).
+    pub gamut: GamutSettings,
     /// The DCTL's white balance checkbox starts on (off: footage white-balanced in the
     /// raw decode).
     pub white_balance: bool,
@@ -90,6 +94,7 @@ impl Default for ChartSettings {
             fit: FitSettings::default(),
             target: Target::Reference,
             highlights: HighlightSettings::default(),
+            gamut: GamutSettings::default(),
             white_balance: true,
         }
     }
@@ -155,6 +160,8 @@ pub struct ChartAnalysis {
     pub fit_error: Option<String>,
     /// Highlight protection for the DCTL, with the clip level resolved.
     pub highlights: Highlights,
+    /// Gamut compression, with its threshold and limits resolved.
+    pub gamut: Gamut,
     /// The DCTL's white balance checkbox starts on.
     pub white_balance: bool,
     pub notes: Vec<String>,
@@ -231,6 +238,24 @@ fn placement_score(img: &ChartImage, p: &Placement, s: &ChartSettings, clip: &Cl
     let lum = |i: usize| sm.codes[i].iter().sum::<f64>();
     let inversions = NEUTRALS.windows(2).filter(|w| lum(w[0]) <= lum(w[1])).count();
     mean + 5.0 * inversions as f64
+}
+
+/// About 100 000 of the still's pixels after the correction (as the DCTL does it, before
+/// gamut compression), linear DWG.
+fn corrected_pixels(img: &ChartImage, space: &StillSpace, fit: &ChartFit, hl: &Highlights, white_balance: bool) -> Vec<Vec3> {
+    let step = ((img.width * img.height) as f64 / 100_000.0).sqrt().ceil().max(1.0) as usize;
+    let mut out = Vec::new();
+    for y in (step / 2..img.height).step_by(step) {
+        for x in (step / 2..img.width).step_by(step) {
+            let p = img.pixel(x, y);
+            let xyz = space.to_xyz(&[p[0] as f64, p[1] as f64, p[2] as f64]);
+            let o = davinci::xyz_to_dwg() * hl.apply(fit, &(davinci::xyz_to_dwg() * xyz), white_balance);
+            if o.iter().all(|v| v.is_finite()) {
+                out.push(o);
+            }
+        }
+    }
+    out
 }
 
 /// A patch's noise covariance in linear DWG: the stored one through the still's decoding,
@@ -415,6 +440,13 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
         })
         .collect();
 
+    let highlights = Highlights::resolve(&s.highlights, &clip, &space);
+    let gamut = {
+        let targets: Vec<Vec3> = target_xyz.iter().map(|t| davinci::xyz_to_dwg() * t).collect();
+        let pixels = fit.as_ref().map_or_else(Vec::new, |f| corrected_pixels(img, &space, f, &highlights, s.white_balance));
+        Gamut::resolve(&s.gamut, &targets, &pixels)
+    };
+
     Ok(ChartAnalysis {
         file_name: img.file_name.clone(),
         image: img.info.clone(),
@@ -432,7 +464,8 @@ pub fn analyze(img: &ChartImage, lattice: Option<&Lattice>, s: &ChartSettings) -
         patches: reports,
         fit,
         fit_error,
-        highlights: Highlights::resolve(&s.highlights, &clip, &space),
+        highlights,
+        gamut,
         white_balance: s.white_balance,
         notes,
     })
@@ -510,7 +543,7 @@ impl ChartAnalysis {
     }
 
     pub fn dctl(&self, date: &str) -> Option<String> {
-        Some(dctl::chart_dctl(self.fit.as_ref()?, &self.highlights, self.white_balance, &self.dctl_meta(date)?))
+        Some(dctl::chart_dctl(self.fit.as_ref()?, &self.highlights, &self.gamut, self.white_balance, &self.dctl_meta(date)?))
     }
 }
 
@@ -531,6 +564,7 @@ pub enum PreviewDisplay {
 pub struct PreviewCorrection<'a> {
     pub fit: &'a ChartFit,
     pub highlights: &'a Highlights,
+    pub gamut: &'a Gamut,
     pub white_balance: bool,
 }
 
@@ -579,7 +613,10 @@ pub fn preview_jpeg_with(
         let p = img.pixel(x * step + step / 2, y * step + step / 2);
         let xyz = space.to_xyz(&[p[0] as f64, p[1] as f64, p[2] as f64]);
         let xyz = match correction {
-            Some(c) => c.highlights.apply(c.fit, &(xyz_to_dwg() * xyz), c.white_balance),
+            Some(c) => {
+                let o = c.highlights.apply(c.fit, &(xyz_to_dwg() * xyz), c.white_balance);
+                crate::spaces::davinci::dwg_to_xyz() * c.gamut.apply(&(xyz_to_dwg() * o))
+            }
             None => xyz,
         } * scale;
         if !xyz.iter().all(|v| v.is_finite()) {
