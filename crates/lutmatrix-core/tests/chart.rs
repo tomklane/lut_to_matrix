@@ -6,6 +6,7 @@ use std::process::Command;
 use lutmatrix_core::chart::detect::{find_lattice, homography, Orientation};
 use lutmatrix_core::chart::encoding::{StillGamut, StillSpace};
 use lutmatrix_core::chart::fit::{Exposure, Model, Tone};
+use lutmatrix_core::chart::gamut::GamutSettings;
 use lutmatrix_core::chart::highlights::{ClipSource, HighlightSettings};
 use lutmatrix_core::chart::mixer::MixerSpace;
 use lutmatrix_core::chart::image::ChartImage;
@@ -254,7 +255,9 @@ fn chart_dctl_compiles_and_matches() {
         (Model::Nodes, true, true, true, false),
         (Model::Nodes, false, false, true, false),
     ];
-    for (model, preserve, protect, wb, tps) in cases {
+    for (case, (model, preserve, protect, wb, tps)) in cases.into_iter().enumerate() {
+        // Gamut compression in most cases, with a low threshold so the codes reach it.
+        let gamut = case % 4 != 1;
         let s = ChartSettings {
             fit: lutmatrix_core::chart::fit::FitSettings {
                 model: if tps { Model::Tps } else { model },
@@ -266,10 +269,13 @@ fn chart_dctl_compiles_and_matches() {
             },
             // A clip inside the tested codes (up to 0.7), so the protection is exercised.
             highlights: HighlightSettings { enabled: protect, clip_di: Some(0.55), softness: 1.5, strength: 0.9 },
+            gamut: GamutSettings { enabled: gamut, threshold: Some(0.6) },
             white_balance: wb,
             ..Default::default()
         };
         let mut a = analyze(&img, None, &s).unwrap();
+        // Limits that make the curve bite (the synthetic still barely leaves the gamut).
+        a.gamut.limits = [1.3, 1.1, 1.6];
         // Exercise a real curve in the tone model.
         if let Some(f) = a.fit.as_mut() {
             if f.tone.is_some() {
@@ -291,9 +297,11 @@ fn chart_dctl_compiles_and_matches() {
         assert_eq!(src.contains("MIX_RR"), mixer);
         assert_eq!(src.contains("TPS_C["), tps || model == Model::MatrixTps);
         assert_eq!(src.contains("p_HlClip"), protect);
+        assert_eq!(src.contains("p_GamutThr"), gamut);
         assert_eq!(src.contains(&format!("WB Done In Raw, DCTLUI_CHECK_BOX, {})", u8::from(!wb))), !tps && !mixer);
         let fit = a.fit.clone().unwrap();
         let hl = a.highlights;
+        let ga = a.gamut;
         let dir = std::env::temp_dir().join(format!("lutmatrix-chart-dctl-{}-{model:?}-{preserve}-{protect}-{wb}-{tps}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("c.dctl"), &src).unwrap();
@@ -304,7 +312,9 @@ fn chart_dctl_compiles_and_matches() {
                 Vec3::new((f * 0.137).fract() * 0.7, (f * 0.291).fract() * 0.7, (f * 0.533).fract() * 0.7)
             })
             .collect();
-        let want = |c: &Vec3| -> Vec3 { (xyz_to_dwg() * hl.apply(&fit, &c.map(di_decode), wb)).map(di_encode) };
+        let want = |c: &Vec3| -> Vec3 { ga.apply(&(xyz_to_dwg() * hl.apply(&fit, &c.map(di_decode), wb))).map(di_encode) };
+        let bent = codes.iter().filter(|c| { let d = xyz_to_dwg() * hl.apply(&fit, &c.map(di_decode), wb); ga.apply(&d) != d }).count();
+        assert_eq!(bent > 20, gamut, "{model:?}: {bent} codes compressed");
         for (cc, args) in [("cc", vec!["-std=c99"]), ("c++", vec!["-x", "c++", "-std=c++14"])] {
             if Command::new(cc).arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
                 continue;
@@ -334,6 +344,28 @@ fn chart_dctl_compiles_and_matches() {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+#[test]
+fn gamut_settings_reach_the_dctl_and_preview() {
+    let img = di_still(UPSIDE_DOWN, cam(), 0.5);
+    let on = analyze(&img, None, &ChartSettings::default()).unwrap();
+    assert!(on.gamut.enabled && on.gamut.threshold > on.gamut.chart_reach && on.gamut.chart_reach > 0.5, "{:?}", on.gamut);
+    assert!(on.gamut.limits.iter().all(|l| *l > 1.0 && *l > on.gamut.threshold));
+    let d = on.dctl("2026-01-01").unwrap();
+    assert!(d.contains(&format!("Gamut Threshold, DCTLUI_SLIDER_FLOAT, {:.4}", on.gamut.threshold)) && d.contains("Gamut Compress Off, DCTLUI_CHECK_BOX, 0"));
+    let set = analyze(&img, None, &ChartSettings { gamut: GamutSettings { enabled: true, threshold: Some(0.62) }, ..Default::default() }).unwrap();
+    assert_eq!(set.gamut.threshold, 0.62);
+    assert_eq!(set.gamut.auto_threshold, on.gamut.threshold);
+    assert!(set.dctl("2026-01-01").unwrap().contains("Gamut Threshold, DCTLUI_SLIDER_FLOAT, 0.6200"));
+    let off = analyze(&img, None, &ChartSettings { gamut: GamutSettings { enabled: false, threshold: None }, ..Default::default() }).unwrap();
+    assert!(!off.dctl("2026-01-01").unwrap().contains("gamut_compress"));
+    // The preview follows: a low threshold changes the corrected picture.
+    let pv = |a: &lutmatrix_core::chart::ChartAnalysis| {
+        let corr = PreviewCorrection { fit: a.fit.as_ref().unwrap(), highlights: &a.highlights, gamut: &a.gamut, white_balance: true };
+        preview_jpeg_with(&img, &a.space, 1.0, Some(corr), PreviewDisplay::Simple, 200).0
+    };
+    assert_ne!(pv(&set), pv(&off));
 }
 
 #[test]
@@ -373,7 +405,7 @@ fn corrected_preview_differs_and_opendrt_display_works() {
     let s = ChartSettings { fit: lutmatrix_core::chart::fit::FitSettings { model, mixer_preserve: false, ..Default::default() }, ..Default::default() };
     let a = analyze(&img, Some(&lat), &s).unwrap();
     let fit = a.fit.as_ref().unwrap();
-    let corr = PreviewCorrection { fit, highlights: &a.highlights, white_balance: true };
+    let corr = PreviewCorrection { fit, highlights: &a.highlights, gamut: &a.gamut, white_balance: true };
     for display in [PreviewDisplay::Simple, PreviewDisplay::OpenDrt { look: 0, tonescale: 0 }] {
         let (b, w, h) = preview_jpeg_with(&img, &a.space, fit.exposure_ratio, None, display, 400);
         let (c, w2, h2) = preview_jpeg_with(&img, &a.space, fit.exposure_ratio, Some(corr), display, 400);
@@ -541,6 +573,7 @@ fn app_settings_keys_match() {
     check(iface("ChartSettings"), keys(&rust), "ChartSettings");
     check(iface("ChartFitSettings"), keys(&rust["fit"]), "FitSettings");
     check(iface("HighlightSettings"), keys(&rust["highlights"]), "HighlightSettings");
+    check(iface("GamutSettings"), keys(&rust["gamut"]), "GamutSettings");
     check(iface("OdrtChartSettings"), keys(&serde_json::to_value(OdrtChartSettings::default()).unwrap()), "OdrtChartSettings");
     // And the parser found them (not an empty pass).
     assert!(iface("ChartFitSettings").len() >= 10, "{:?}", iface("ChartFitSettings"));

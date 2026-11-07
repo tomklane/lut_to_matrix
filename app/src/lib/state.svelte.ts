@@ -20,8 +20,10 @@ import {
   type OdrtChartSettings,
   defaultChartFit,
   defaultHighlights,
+  defaultGamut,
   defaultOdrtChart,
   type HighlightSettings,
+  type GamutSettings,
   type InputSpace,
   type LoadedLut,
   type MatchSettings,
@@ -79,7 +81,7 @@ class AppState {
   still = $state<LoadedStill | null>(null);
   loadingStill = $state(false);
   /** Per-still choices (not remembered): encoding override, orientation, corners, excluded patches. */
-  chart = $state<ChartSettings>(freshChartSettings(structuredClone(defaultChartFit), "after2014", structuredClone(defaultHighlights), true));
+  chart = $state<ChartSettings>(freshChartSettings(structuredClone(defaultChartFit), "after2014", structuredClone(defaultHighlights), structuredClone(defaultGamut), true));
   /** The target: null = the published chart, else another still. */
   chartTarget = $state<LoadedStill | null>(null);
   chartAnalysis = $state<ChartAnalysis | null>(null);
@@ -105,7 +107,7 @@ class AppState {
       const s = await api.chartLoad(path);
       this.still = s;
       // Fresh per-still choices, same fit settings.
-      this.chart = freshChartSettings($state.snapshot(this.chart.fit), this.chart.edition, $state.snapshot(this.chart.highlights), this.chart.white_balance);
+      this.chart = freshChartSettings($state.snapshot(this.chart.fit), this.chart.edition, $state.snapshot(this.chart.highlights), $state.snapshot(this.chart.gamut), this.chart.white_balance);
       this.chartAnalysis = null;
       this.chartError = null;
       this.chartPreview = null;
@@ -220,6 +222,7 @@ class AppState {
       chartFit: $state.snapshot(this.chart.fit),
       chartEdition: this.chart.edition,
       chartHighlights: $state.snapshot(this.chart.highlights),
+      chartGamut: $state.snapshot(this.chart.gamut),
       chartWhiteBalance: this.chart.white_balance,
       chartDisplay: this.chartDisplay,
       odrtChart: $state.snapshot(this.odrtChart),
@@ -239,6 +242,8 @@ class AppState {
     if (prefs.chartEdition === "after2014" || prefs.chartEdition === "before2014") this.chart.edition = prefs.chartEdition;
     if (prefs.chartHighlights && typeof prefs.chartHighlights === "object")
       this.chart.highlights = { ...structuredClone(defaultHighlights), ...(prefs.chartHighlights as Partial<HighlightSettings>) };
+    if (prefs.chartGamut && typeof prefs.chartGamut === "object")
+      this.chart.gamut = { ...structuredClone(defaultGamut), ...(prefs.chartGamut as Partial<GamutSettings>) };
     if (typeof prefs.chartWhiteBalance === "boolean") this.chart.white_balance = prefs.chartWhiteBalance;
     if (prefs.chartDisplay === "simple" || prefs.chartDisplay === "opendrt") this.chartDisplay = prefs.chartDisplay;
     if (prefs.odrtChart && typeof prefs.odrtChart === "object")
@@ -252,8 +257,14 @@ class AppState {
   }
 }
 
-function freshChartSettings(fit: ChartFitSettings, edition: ChartSettings["edition"], highlights: HighlightSettings, white_balance: boolean): ChartSettings {
-  return { edition, space: null, orientation: null, corners: null, sample_size: 0.4, exclude: [], clip_fraction: 0.02, mirrors: false, fit, highlights, white_balance };
+function freshChartSettings(
+  fit: ChartFitSettings,
+  edition: ChartSettings["edition"],
+  highlights: HighlightSettings,
+  gamut: GamutSettings,
+  white_balance: boolean,
+): ChartSettings {
+  return { edition, space: null, orientation: null, corners: null, sample_size: 0.4, exclude: [], clip_fraction: 0.02, mirrors: false, fit, highlights, gamut, white_balance };
 }
 
 export const app = new AppState();

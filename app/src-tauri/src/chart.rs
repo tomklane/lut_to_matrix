@@ -192,7 +192,7 @@ pub async fn chart_preview(
     let display = display.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let corr = analysis.as_ref().and_then(|a| {
-            Some(PreviewCorrection { fit: a.fit.as_ref()?, highlights: &a.highlights, white_balance: a.white_balance })
+            Some(PreviewCorrection { fit: a.fit.as_ref()?, highlights: &a.highlights, gamut: &a.gamut, white_balance: a.white_balance })
         });
         let (jpg, w, h) = preview_jpeg_with(&s.img, &space, exposure_ratio, corr, display, 1600);
         Preview {

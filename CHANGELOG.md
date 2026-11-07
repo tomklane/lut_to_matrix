@@ -6,6 +6,22 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-07
+
+### Added
+- **Gamut compression** after the chart correction (DECISIONS D49), on by default: colours
+  the correction pushes outside the gamut (a channel below 0, for example dark, noisy
+  water under a strong underwater correction) are pulled back smoothly instead of
+  clipping, with the ACES Reference Gamut Compression. It starts just above the chart's
+  most saturated colour, so the chart match is unchanged, and its limits come from the
+  chart still's own pixels. In the DCTL ("Gamut Compress Off", "Gamut Threshold") and the
+  preview; the app shows how much of the still is pushed outside, with and without it.
+  CLI: `--no-gamut-compress`, `--gamut-threshold`.
+
+### Fixed
+- The Gain + Mixer DCTL's header described the old Saturation formula (Rec. 709 on
+  linear values); it now describes the one it uses (D47).
+
 ## [0.11.0] - 2026-11-05
 
 ### Added

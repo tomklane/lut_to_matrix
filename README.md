@@ -69,7 +69,8 @@ it after the matrix. Compare the cross-check with the matrix's before trusting e
 and Saturation for a linear node and the RGB Mixer for the next one. Each fit shows how
 much noise it adds at mid gray, measured on the chart; *Noise-aware* trades some chart
 accuracy for less (set *Colour noise counts* to Low to keep the noise out of brightness,
-then remove the colour noise with chroma-only noise reduction). Drag the blue corner handles
+then remove the colour noise with chroma-only noise reduction). *Gamut compression* (on by default) pulls
+colours the correction pushes out of gamut back in instead of letting them clip. Drag the blue corner handles
 to fine-tune where the patches are sampled. Under the
 image, *Before / After / Split* shows the
 correction as the DCTL applies it (plain or through OpenDRT), and *Other Still…* shows

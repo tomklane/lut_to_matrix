@@ -769,3 +769,29 @@ Each entry: what, why, alternatives considered, and whether it is a user setting
   times the still's, and the same for a plain white balance (DWG gains to the target
   gray) as a floor to compare with. Less noise is mostly bought by mixing channels
   (averaging), i.e. less saturation; the ΔE shows the cost.
+
+## D49 — Gamut compression after the chart correction (user report 2026-11-07)
+- Problem: a strong correction (the user's underwater matrix: red = 5.6 R − 1.9 G +
+  0.3 B in linear DWG) pushes colours the chart doesn't have below 0 in one channel,
+  which clips: on the user's reef frame 1 % of the pixels (dark, noisy water and
+  shadows: dark cyan specks); on their chart still 6.6 % (Matrix), 1.2 % (Gain + Mixer),
+  22 % (TPS3D, near black).
+- Fix: the ACES Reference Gamut Compression (ACES 1.3, `LMT.Academy.ReferenceGamutCompress.ctl`)
+  on the correction's output, in linear DWG, before `Amount`: per channel the distance
+  `d = (max − c) / max` is compressed above a threshold with `t + s·x / (1 + x^p)^(1/p)`,
+  power 1.2, `s` such that the limit lands on the edge. Neutrals, the largest channel and
+  everything below the threshold are untouched; it is smooth and monotonic.
+- Threshold: just above the chart's most saturated target colour (its largest distance in
+  DWG + 0.04, at least 0.7), so the chart match is unchanged: ColorChecker 2014 reaches
+  0.78, so 0.82. Settable (0.5 … 0.98) in the app, the CLI and a DCTL slider.
+- Limits per channel: the 99.9th percentile of the distances the correction gives the
+  chart still's own pixels (about 100 000 of them, largest channel above 0.002 linear),
+  between 1.05 (and threshold + 0.05) and 4. The still is a frame of the footage, so its
+  colours come back inside (on the user's chart still: 6.6 % → 0.16 % outside for the
+  matrix). Beyond the limit a channel can still go slightly below 0.
+- On by default (it only changes colours that would otherwise clip). In the DCTL the
+  checkbox is "Gamut Compress Off", unticked = on, because Resolve brings a new checkbox
+  in unticked (D43's lesson). The reported ΔE2000 is the fit's, before compression; the
+  chart's colours are below the threshold, so it doesn't change them (a patch the fit
+  itself pushes out, such as a noisy black, can move).
+
